@@ -1,8 +1,13 @@
+brotli==1.2.1
+certifi==2026.10.23
+filelock==4.2.10
 gradio-rangeslider==0.0.8
 gradio==5.50.0
+httpx==0.28.1
 numpy==2.4.6
 onnx==1.22.0
 onnxruntime==1.29.0
 opencv-python-headless==5.0.0.93
+pillow==13.0.0
 tqdm==4.70.0
 scipy==1.18.0

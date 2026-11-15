@@ -76,12 +76,14 @@ def open_output_directory(output_path : str) -> None:
 	raw = (output_path or state_manager.get_item('output_path') or '').strip()
 	if not raw:
 		raise gradio.Error('请先设置输出路径。')
+	if raw.startswith(('\\\\', '//')) or '://' in raw:
+		raise gradio.Error('安全拦截：不支持直接打开网络共享（UNC）或远程协议路径。')
 	target = Path(raw)
 	folder = target if (target.exists() and target.is_dir()) or not target.suffix else target.parent
 	try:
 		folder.mkdir(parents = True, exist_ok = True)
 		if os.name == 'nt':
-			os.startfile(str(folder)) #type:ignore[attr-defined]
+			os.startfile(str(folder.resolve())) #type:ignore[attr-defined]
 		gradio.Info(f'已打开目录：{folder}')
 	except OSError as exc:
 		raise gradio.Error(f'无法打开目录：{exc}') from exc

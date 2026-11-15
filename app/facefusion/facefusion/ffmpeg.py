@@ -312,7 +312,8 @@ def concat_video(output_path : str, temp_output_paths : List[str]) -> bool:
 
 	with open(concat_video_path, 'w') as concat_video_file:
 		for temp_output_path in temp_output_paths:
-			concat_video_file.write('file \'' + os.path.abspath(temp_output_path) + '\'' + os.linesep)
+			escaped_temp_path = os.path.abspath(temp_output_path).replace('\'', '\'\\\'\'')
+			concat_video_file.write('file \'' + escaped_temp_path + '\'' + os.linesep)
 		concat_video_file.flush()
 		concat_video_file.close()
 

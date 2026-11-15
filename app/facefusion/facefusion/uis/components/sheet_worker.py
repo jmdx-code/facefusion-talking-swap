@@ -164,10 +164,27 @@ def _md_link(url: str, label: str = '点击查看') -> str:
     if not clean or clean == '-':
         return '-'
     if not is_probably_url(clean):
-        return clean
+        escaped_text = html.escape(clean, quote=True).replace('\r', ' ').replace('\n', ' ')
+        return escaped_text.replace('[', '&#91;').replace(']', '&#93;')
     href = clean if clean.startswith(('http://', 'https://')) else f'https://{clean}'
-    safe_href = href.replace('(', '%28').replace(')', '%29').replace(' ', '%20')
-    return f'[{label}]({safe_href})'
+    if not href.lower().startswith(('http://', 'https://')):
+        return '-'
+    safe_href = (
+        href.replace('\r', '')
+        .replace('\n', '')
+        .replace('\t', '')
+        .replace(' ', '%20')
+        .replace('"', '%22')
+        .replace("'", '%27')
+        .replace('<', '%3C')
+        .replace('>', '%3E')
+        .replace('[', '%5B')
+        .replace(']', '%5D')
+        .replace('(', '%28')
+        .replace(')', '%29')
+    )
+    safe_label = html.escape(label, quote=True).replace('[', '&#91;').replace(']', '&#93;')
+    return f'[{safe_label}]({safe_href})'
 
 
 def _encode_choice_token(row: SheetTaskRow) -> str:

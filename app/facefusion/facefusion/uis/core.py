@@ -75,9 +75,24 @@ def init() -> None:
 
 	logging.getLogger('asyncio').setLevel(logging.CRITICAL)
 	warnings.filterwarnings('ignore', category = UserWarning, module = 'gradio')
-	gradio.processing_utils._check_allowed = uis_overrides.mock
+	gradio.processing_utils._check_allowed = uis_overrides.check_allowed_path
 	gradio.processing_utils.convert_video_to_playable_mp4 = uis_overrides.convert_video_to_playable_mp4
 	gradio.components.Number.raise_if_out_of_bounds = uis_overrides.mock
+
+
+def launch_gradio_ui(ui : gradio.Blocks) -> None:
+	server_name = (os.environ.get('FACEFUSION_SERVER_NAME') or '127.0.0.1').strip() or '127.0.0.1'
+	ui_password = os.environ.get('FACEFUSION_UI_PASSWORD') or ''
+	ui_username = (os.environ.get('FACEFUSION_UI_USERNAME') or 'admin').strip() or 'admin'
+	launch_kwargs : Dict[str, Any] = {
+		'server_name': server_name,
+		'favicon_path': 'facefusion.ico',
+		'inbrowser': state_manager.get_item('open_browser'),
+		'blocked_paths': uis_overrides.get_blocked_ui_paths(),
+	}
+	if ui_password:
+		launch_kwargs['auth'] = (ui_username, ui_password)
+	ui.launch(**launch_kwargs)
 
 
 def launch() -> None:

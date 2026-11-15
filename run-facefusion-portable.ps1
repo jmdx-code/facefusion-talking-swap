@@ -1,4 +1,5 @@
 ﻿param(
+    [switch]$SkipPreflight,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$FaceFusionArgs
 )
@@ -7,18 +8,11 @@ $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
 $sourceDir = Join-Path $packageRoot 'app\facefusion'
 $python = Join-Path $packageRoot 'runtime\python\python.exe'
-$ffmpegBin = Get-ChildItem (Join-Path $packageRoot 'tools\ffmpeg') -Directory -ErrorAction SilentlyContinue |
-    Select-Object -First 1 |
-    ForEach-Object { Join-Path $_.FullName 'bin' }
-$nvidiaBins = Get-ChildItem (Join-Path $packageRoot 'runtime\python\Lib\site-packages\nvidia') -Directory -Recurse -ErrorAction SilentlyContinue |
-    Where-Object Name -eq 'bin' |
-    Select-Object -ExpandProperty FullName
+$autoUpdater = Join-Path $packageRoot 'auto_updater.py'
+$envBootstrap = Join-Path $packageRoot 'env_bootstrap.py'
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "便携版 Python 不完整：$python"
-}
-if (-not $ffmpegBin -or -not (Test-Path -LiteralPath (Join-Path $ffmpegBin 'ffprobe.exe'))) {
-    throw '便携版 FFmpeg/FFprobe 不完整。'
+    throw "便携版 Python 核心不完整：$python"
 }
 
 $nvcudaDll = if ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\nvcuda.dll' } else { '' }
@@ -40,7 +34,6 @@ foreach ($dir in @($userDataDir, $modelsDir, $tempDir, $gradioTempDir, $jobsDir,
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
 }
 
-$env:PATH = (@($ffmpegBin) + @($nvidiaBins) + @((Split-Path $python)) + @($env:PATH)) -join ';'
 $env:FACEFUSION_USERDATA_DIR = $userDataDir
 $env:PYTHONNOUSERSITE = '1'
 $env:PYTHONPYCACHEPREFIX = $pyCacheDir
@@ -80,7 +73,38 @@ if (-not $FaceFusionArgs -or $FaceFusionArgs.Count -eq 0) {
     )
 }
 
-if ($FaceFusionArgs.Count -gt 0 -and $FaceFusionArgs[0] -eq 'run') {
+$isInteractiveRun = ($FaceFusionArgs.Count -gt 0 -and $FaceFusionArgs[0] -eq 'run')
+
+if ($isInteractiveRun -and (-not $SkipPreflight)) {
+    if (Test-Path -LiteralPath $autoUpdater) {
+        & $python -B $autoUpdater --startup-check
+    }
+    if (Test-Path -LiteralPath $envBootstrap) {
+        & $python -B $envBootstrap --check-only
+        if ($LASTEXITCODE -eq 10) {
+            & $python -B $envBootstrap --ensure
+            if ($LASTEXITCODE -ne 0) {
+                exit $LASTEXITCODE
+            }
+        }
+    }
+}
+
+# Resolve FFmpeg and NVIDIA CUDA/cuDNN DLL directories AFTER env_bootstrap has ensured they exist
+$ffmpegBin = Get-ChildItem (Join-Path $packageRoot 'tools\ffmpeg') -Directory -ErrorAction SilentlyContinue |
+    Select-Object -First 1 |
+    ForEach-Object { Join-Path $_.FullName 'bin' }
+$nvidiaBins = Get-ChildItem (Join-Path $packageRoot 'runtime\python\Lib\site-packages\nvidia') -Directory -Recurse -ErrorAction SilentlyContinue |
+    Where-Object Name -eq 'bin' |
+    Select-Object -ExpandProperty FullName
+
+if (-not $ffmpegBin -or -not (Test-Path -LiteralPath (Join-Path $ffmpegBin 'ffprobe.exe'))) {
+    throw '便携版 FFmpeg/FFprobe 尚未就绪，请检查网络连接后重新启动完成首次初始化。'
+}
+
+$env:PATH = (@($ffmpegBin) + @($nvidiaBins) + @((Split-Path $python)) + @($env:PATH)) -join ';'
+
+if ($isInteractiveRun) {
     $extraPathArgs = @()
     if ($FaceFusionArgs -notcontains '--temp-path') {
         $extraPathArgs += @('--temp-path', $tempDir)
@@ -103,7 +127,7 @@ if ($FaceFusionArgs.Count -gt 0 -and $FaceFusionArgs[0] -eq 'run') {
 
 Push-Location $sourceDir
 try {
-    if ($FaceFusionArgs.Count -gt 0 -and $FaceFusionArgs[0] -eq 'run') {
+    if ($isInteractiveRun -and (-not $SkipPreflight)) {
         & $python -m facefusion.model_bootstrap --ensure
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE

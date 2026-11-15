@@ -5,6 +5,13 @@
 **/userdata/
 *client_secret*.json
 *google-token*.json
+*service_account*.json
+*service-account*.json
+credentials.json
+*.pem
+*.key
+*.pfx
+*.p12
 facefusion-google-token.json
 facefusion-google-client-secret.json
 facefusion-sheet-worker.json
@@ -42,6 +49,7 @@ __pycache__/
 *.tmp
 .env
 .env.*
+!.env.example
 .DS_Store
 Thumbs.db
 .vs/

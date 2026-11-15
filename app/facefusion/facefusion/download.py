@@ -12,7 +12,7 @@ from tqdm import tqdm
 import facefusion.choices
 from facefusion import logger, metadata, process_manager, state_manager, translator
 from facefusion.filesystem import get_file_name, get_file_size, is_file, remove_file
-from facefusion.hash_helper import validate_hash
+from facefusion.hash_helper import get_hash_path, validate_hash
 from facefusion.types import DownloadProvider, DownloadSet
 
 _GH_ASSET_RE = re.compile(r'/facefusion/facefusion-assets/releases/download/(?P<base>[^/]+)/(?P<file>[^/?#]+)$')
@@ -53,7 +53,10 @@ def _make_download_client(timeout : httpx.Timeout) -> httpx.Client:
 	return httpx.Client(
 		timeout = timeout,
 		follow_redirects = True,
-		headers = { 'User-Agent': user_agent },
+		headers = {
+			'User-Agent': user_agent,
+			'Accept-Encoding': 'gzip, deflate'
+		},
 		mounts = mounts
 	)
 
@@ -185,6 +188,8 @@ def _stream_download_with_failover(url : str, destination_path : str) -> bool:
 
 
 def conditional_download(download_directory_path : str, urls : List[str]) -> None:
+	from facefusion.model_bootstrap import validate_model_sha256
+
 	os.makedirs(download_directory_path, exist_ok = True)
 	for url in urls:
 		if not url:
@@ -194,12 +199,17 @@ def conditional_download(download_directory_path : str, urls : List[str]) -> Non
 		if is_file(download_file_path):
 			if download_file_name.endswith('.hash') and get_file_size(download_file_path) > 0:
 				continue
-			if validate_hash(download_file_path):
+			if validate_hash(download_file_path) and validate_model_sha256(download_file_path):
 				continue
-			expected_size = get_static_download_size(url)
-			if expected_size > 0 and get_file_size(download_file_path) >= expected_size:
-				continue
-		_stream_download_with_failover(url, download_file_path)
+			hash_path = get_hash_path(download_file_path)
+			if not is_file(hash_path) and validate_model_sha256(download_file_path):
+				expected_size = get_static_download_size(url)
+				if expected_size > 0 and get_file_size(download_file_path) >= expected_size:
+					continue
+		if _stream_download_with_failover(url, download_file_path):
+			if not validate_model_sha256(download_file_path):
+				logger.error(f'SHA-256 verification failed for {download_file_name}; removing untrusted file.', __name__)
+				remove_file(download_file_path)
 
 
 @lru_cache(maxsize = 64)

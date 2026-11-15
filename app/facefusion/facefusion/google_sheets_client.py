@@ -6,13 +6,16 @@ import datetime
 import hashlib
 import html
 import http.server
+import ipaddress
 import json
 import mimetypes
 import os
 import random
 import re
 import secrets
+import socket
 import string
+import subprocess
 import tempfile
 import threading
 import time
@@ -78,6 +81,154 @@ DEFAULT_SYSTEM_HEADERS: Dict[str, str] = {
 }
 
 
+SAFE_TASK_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$')
+
+ALLOWED_MEDIA_EXTENSIONS = {
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.heic', '.heif', '.avif',
+    '.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v', '.mpeg', '.mpg', '.wmv', '.flv', '.ts'
+}
+
+_BLOCKED_SSRF_HOSTS = {
+    'localhost',
+    'localhost.localdomain',
+    'ip6-localhost',
+    'ip6-loopback',
+    'metadata.google.internal',
+    'metadata',
+    'instance-data',
+}
+
+_BLOCKED_SSRF_NETWORKS = (
+    ipaddress.ip_network('0.0.0.0/8'),
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('127.0.0.0/8'),
+    ipaddress.ip_network('169.254.0.0/16'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('100.100.100.200/32'),
+    ipaddress.ip_network('224.0.0.0/4'),
+    ipaddress.ip_network('240.0.0.0/4'),
+    ipaddress.ip_network('::/128'),
+    ipaddress.ip_network('::1/128'),
+    ipaddress.ip_network('fc00::/7'),
+    ipaddress.ip_network('fe80::/10'),
+    ipaddress.ip_network('ff00::/8'),
+)
+
+
+def is_safe_task_id(task_id: str) -> bool:
+    clean = (task_id or '').strip()
+    return bool(clean and SAFE_TASK_ID_RE.fullmatch(clean))
+
+
+def _sanitize_media_extension(ext: str, default_ext: str) -> str:
+    clean = (ext or '').strip().lower()
+    if clean == '.jpe':
+        clean = '.jpg'
+    if clean in ALLOWED_MEDIA_EXTENSIONS:
+        return clean
+    return default_ext
+
+
+def _is_blocked_ssrf_ip(addr: ipaddress._BaseAddress) -> bool:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return any(addr in net for net in _BLOCKED_SSRF_NETWORKS)
+
+
+def _validate_safe_external_media_url(url: str) -> str:
+    """Validate untrusted media URLs from Google Sheets against SSRF (loopback, RFC1918 LAN, cloud IMDS)."""
+    clean = (url or '').strip()
+    if not clean:
+        raise ValueError('素材链接为空。')
+    parsed = urllib.parse.urlparse(clean)
+    scheme = (parsed.scheme or '').lower()
+    if scheme not in ('http', 'https'):
+        raise ValueError(f'安全拦截：仅支持 http/https 素材链接，拒绝协议“{scheme or "空"}”。')
+    if parsed.username or parsed.password:
+        raise ValueError('安全拦截：素材链接禁止包含内嵌账号密码。')
+    host = (parsed.hostname or '').strip().rstrip('.').lower()
+    if not host:
+        raise ValueError('素材链接缺少有效域名。')
+    if host in _BLOCKED_SSRF_HOSTS or host.endswith('.localhost') or host.endswith('.internal'):
+        raise ValueError(f'安全拦截：禁止从表格素材链接访问本机或内网地址（{host}）。')
+
+    literal_ip: Optional[ipaddress._BaseAddress] = None
+    try:
+        literal_ip = ipaddress.ip_address(host)
+    except ValueError:
+        if re.fullmatch(r'(?:0x[0-9a-f]+|\d+)(?:\.(?:0x[0-9a-f]+|\d+)){0,3}', host):
+            try:
+                packed = socket.inet_aton(host)
+                literal_ip = ipaddress.IPv4Address(packed)
+            except OSError:
+                pass
+
+    if literal_ip is not None:
+        if _is_blocked_ssrf_ip(literal_ip):
+            raise ValueError(f'安全拦截：禁止从表格素材链接访问本机回环、局域网私有地址或云元数据地址（{host}）。')
+        return clean
+
+    port = parsed.port or (443 if scheme == 'https' else 80)
+    try:
+        addr_infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        # Allow remote proxy resolution or mocked unit-test hosts when local DNS cannot resolve.
+        return clean
+
+    for info in addr_infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        raw_ip = str(sockaddr[0]).split('%', 1)[0]
+        try:
+            resolved_ip = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        if _is_blocked_ssrf_ip(resolved_ip):
+            raise ValueError(f'安全拦截：域名 {host} 解析到了本机或内网受保护地址（{raw_ip}），已拒绝访问。')
+    return clean
+
+
+def restrict_sensitive_file_permissions(path: Path) -> None:
+    """Restrict local credential/token file permissions to the current OS user only."""
+    target = Path(path)
+    if not target.exists():
+        return
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    if os.name == 'nt':
+        username = (os.environ.get('USERNAME') or '').strip()
+        userdomain = (os.environ.get('USERDOMAIN') or '').strip()
+        principal = f'{userdomain}\\{username}' if (userdomain and username) else username
+        if principal:
+            try:
+                subprocess.run(
+                    [
+                        'icacls',
+                        str(target),
+                        '/inheritance:r',
+                        '/grant:r',
+                        f'{principal}:(F)',
+                        '*S-1-5-18:(F)',
+                        '*S-1-5-32-544:(F)',
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                )
+            except Exception:
+                pass
+
+
+def _is_sensitive_json_path(path: Path) -> bool:
+    lower = path.name.lower()
+    return any(k in lower for k in ('token', 'secret', 'credential'))
+
+
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix='.' + path.stem + '-', suffix='.tmp', dir=str(path.parent))
@@ -86,6 +237,8 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
             json.dump(payload, stream, ensure_ascii=False, indent=2)
             stream.write('\n')
         os.replace(tmp_name, path)
+        if _is_sensitive_json_path(path):
+            restrict_sensitive_file_permissions(path)
     finally:
         if os.path.exists(tmp_name):
             try:
@@ -1285,7 +1438,7 @@ class GoogleSheetsCoordinator:
             if (
                 item.status.strip() == SHEET_STATUS_IN_PROGRESS
                 and item.worker.strip() == clean_worker
-                and bool(item.task_id.strip())
+                and is_safe_task_id(item.task_id)
                 and not item.output_url.strip()
                 and is_probably_url(item.source_url)
                 and is_probably_url(item.target_url)
@@ -1360,12 +1513,12 @@ class GoogleDriveClient:
                 raise ValueError(f'该链接是 Google 在线文档类型（{mime_type}），不是可直接下载的图片或视频素材。')
             orig_name = str(meta.get('name') or '')
             orig_ext = Path(orig_name).suffix.lower()
-            if orig_ext and len(orig_ext) <= 6:
-                ext = orig_ext
+            if orig_ext:
+                ext = _sanitize_media_extension(orig_ext, default_ext)
             elif mime_type:
                 guessed = mimetypes.guess_extension(mime_type)
                 if guessed:
-                    ext = guessed
+                    ext = _sanitize_media_extension(guessed, default_ext)
             total_bytes = int(meta.get('size') or 0)
         elif meta_resp.status_code in (403, 404):
             # Fallback to public direct export URL if file isn't visible to Drive API metadata
@@ -1484,12 +1637,17 @@ class GoogleDriveClient:
         _allow_drive_confirm_retry: bool = True
     ) -> Tuple[Path, str]:
         dest_dir.mkdir(parents=True, exist_ok=True)
-        clean_url = url.strip()
+        clean_url = _validate_safe_external_media_url(url)
         parsed = urllib.parse.urlparse(clean_url)
         url_basename = Path(urllib.parse.unquote(parsed.path)).name
         path_ext = Path(url_basename).suffix.lower()
-        ext = path_ext if (path_ext and len(path_ext) <= 6) else default_ext
+        ext = _sanitize_media_extension(path_ext, default_ext) if path_ext else default_ext
         orig_name = url_basename if path_ext else ''
+        max_redirects = 5
+        req_headers = {
+            'User-Agent': 'FaceFusion-SheetWorker/1.0',
+            'Accept-Encoding': 'gzip, deflate',
+        }
 
         last_exc: Optional[Exception] = None
         for attempt in range(self.DOWNLOAD_MAX_RETRIES):
@@ -1498,57 +1656,74 @@ class GoogleDriveClient:
             cur_orig = orig_name
             part_path: Optional[Path] = None
             try:
-                with _make_http_client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=True) as client:
-                    with client.stream('GET', clean_url, headers={'User-Agent': 'FaceFusion-SheetWorker/1.0'}) as stream:
-                        if stream.status_code in (429, 500, 502, 503, 504) and attempt < self.DOWNLOAD_MAX_RETRIES - 1:
-                            time.sleep(min(8.0, (2 ** attempt) + 0.5))
-                            continue
-                        if stream.status_code != 200:
-                            raise ValueError(f'素材链接下载失败（HTTP {stream.status_code}）：{clean_url}')
-                        content_type = (stream.headers.get('Content-Type') or '').split(';')[0].strip().lower()
-                        if content_type == 'text/html':
-                            if _allow_drive_confirm_retry and ('drive.google.com' in clean_url or 'googleusercontent.com' in clean_url):
-                                html_preview = stream.read()[:131072].decode('utf-8', errors='replace')
-                                confirm_url = self._extract_drive_confirm_url(html_preview)
-                                if confirm_url:
-                                    return self._download_from_http(
-                                        confirm_url,
-                                        dest_dir,
-                                        filename_stem,
-                                        default_ext,
-                                        progress_cb,
-                                        _allow_drive_confirm_retry=False
-                                    )
-                            raise ValueError('素材链接返回了网页（HTML）而非图片/视频文件，请确认分享链接已开启访问权限且为直接文件链接。')
+                with _make_http_client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False) as client:
+                    hop_url = clean_url
+                    for hop in range(max_redirects + 1):
+                        with client.stream('GET', hop_url, headers=req_headers) as stream:
+                            if stream.status_code in (301, 302, 303, 307, 308):
+                                if hop >= max_redirects:
+                                    raise ValueError(f'素材链接重定向次数过多（超过 {max_redirects} 次）：{clean_url}')
+                                location = (stream.headers.get('Location') or '').strip()
+                                if not location:
+                                    raise ValueError(f'素材链接返回了无效重定向（HTTP {stream.status_code}）：{clean_url}')
+                                next_url = urllib.parse.urljoin(hop_url, location)
+                                hop_url = _validate_safe_external_media_url(next_url)
+                                continue
+                            if stream.status_code in (429, 500, 502, 503, 504) and attempt < self.DOWNLOAD_MAX_RETRIES - 1:
+                                time.sleep(min(8.0, (2 ** attempt) + 0.5))
+                                break
+                            if stream.status_code != 200:
+                                raise ValueError(f'素材链接下载失败（HTTP {stream.status_code}）：{clean_url}')
+                            content_type = (stream.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+                            if content_type == 'text/html':
+                                if _allow_drive_confirm_retry and ('drive.google.com' in hop_url or 'googleusercontent.com' in hop_url):
+                                    html_preview = stream.read()[:131072].decode('utf-8', errors='replace')
+                                    confirm_url = self._extract_drive_confirm_url(html_preview)
+                                    if confirm_url:
+                                        return self._download_from_http(
+                                            confirm_url,
+                                            dest_dir,
+                                            filename_stem,
+                                            default_ext,
+                                            progress_cb,
+                                            _allow_drive_confirm_retry=False
+                                        )
+                                raise ValueError('素材链接返回了网页（HTML）而非图片/视频文件，请确认分享链接已开启访问权限且为直接文件链接。')
 
-                        disp_name = self._parse_content_disposition_filename(stream.headers.get('Content-Disposition') or '')
-                        if disp_name:
-                            cur_orig = disp_name
-                            disp_ext = Path(disp_name).suffix.lower()
-                            if disp_ext and len(disp_ext) <= 6:
-                                cur_ext = disp_ext
+                            disp_name = self._parse_content_disposition_filename(stream.headers.get('Content-Disposition') or '')
+                            if disp_name:
+                                cur_orig = disp_name
+                                disp_ext = Path(disp_name).suffix.lower()
+                                if disp_ext:
+                                    cur_ext = _sanitize_media_extension(disp_ext, default_ext)
 
-                        if cur_ext == default_ext and content_type:
-                            guessed = mimetypes.guess_extension(content_type)
-                            if guessed and guessed != '.jpe':
-                                cur_ext = guessed
-                        target_path = dest_dir / f'{filename_stem}{cur_ext}'
-                        part_path = dest_dir / f'{filename_stem}{cur_ext}.part'
-                        part_path.unlink(missing_ok=True)
-                        total_bytes = int(stream.headers.get('Content-Length') or 0)
-                        if total_bytes > self.MAX_MEDIA_DOWNLOAD_BYTES:
-                            gb = total_bytes / (1024 ** 3)
-                            raise ValueError(f'素材文件体积过大（{gb:.1f} GB，上限 4 GB），已拦截下载。')
-                        with part_path.open('wb') as out:
-                            for chunk in stream.iter_bytes(chunk_size=1024 * 1024):
-                                out.write(chunk)
-                                downloaded += len(chunk)
-                                if downloaded > self.MAX_MEDIA_DOWNLOAD_BYTES:
-                                    raise ValueError('下载素材体积超过 4 GB 安全上限，已自动中止保护磁盘空间。')
-                                if progress_cb:
-                                    progress_cb(downloaded, total_bytes)
+                            if cur_ext == default_ext and content_type:
+                                guessed = mimetypes.guess_extension(content_type)
+                                if guessed:
+                                    cur_ext = _sanitize_media_extension(guessed, default_ext)
+                            target_path = dest_dir / f'{filename_stem}{cur_ext}'
+                            part_path = dest_dir / f'{filename_stem}{cur_ext}.part'
+                            part_path.unlink(missing_ok=True)
+                            total_bytes = int(stream.headers.get('Content-Length') or 0)
+                            if total_bytes > self.MAX_MEDIA_DOWNLOAD_BYTES:
+                                gb = total_bytes / (1024 ** 3)
+                                raise ValueError(f'素材文件体积过大（{gb:.1f} GB，上限 4 GB），已拦截下载。')
+                            with part_path.open('wb') as out:
+                                for chunk in stream.iter_bytes(chunk_size=1024 * 1024):
+                                    out.write(chunk)
+                                    downloaded += len(chunk)
+                                    if downloaded > self.MAX_MEDIA_DOWNLOAD_BYTES:
+                                        raise ValueError('下载素材体积超过 4 GB 安全上限，已自动中止保护磁盘空间。')
+                                    if progress_cb:
+                                        progress_cb(downloaded, total_bytes)
+                            break
+                    else:
+                        raise ValueError(f'素材链接重定向次数过多：{clean_url}')
 
-                if part_path is None or not part_path.is_file() or part_path.stat().st_size == 0:
+                    if part_path is None:
+                        continue
+
+                if not part_path.is_file() or part_path.stat().st_size == 0:
                     raise ValueError('下载的素材文件为空（0 字节）。')
                 os.replace(part_path, target_path)
                 return target_path, cur_orig

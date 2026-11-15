@@ -8,12 +8,13 @@
 
 > **无需安装 Python、CUDA、FFmpeg 或 Git**，下载即用：
 
-1. 前往本仓库右侧 **[Releases](../../releases/latest)** 页面，下载 **`FaceFusion-Portable-Windows-NVIDIA.zip`**（约 1.4 GB）。
+1. 前往本仓库右侧 **[Releases](../../releases/latest)** 页面，下载 **`FaceFusion-Portable-Windows-NVIDIA.zip`**（仅约 **14 MB** 极简便携初始包）。
 2. 解压到任意英文或中文路径文件夹（建议预留 ≥ 15 GB 可用磁盘空间）。
 3. 双击 **`后台启动FaceFusion.cmd`**（或 `启动FaceFusion.cmd`）：
-   - **首次启动**：控制台窗口会自动从官方国际源（HuggingFace / GitHub Official Releases）下载所需 AI 模型至 `userdata\models\` 并完成 CRC32 完整性校验（支持断点续传；下载一次永久缓存，后续启动秒开）。
-   - **自动打开界面**：模型就绪后浏览器自动打开 `http://127.0.0.1:7860`。
-4. **后续版本升级**：只需在 Releases 下载仅约 **0.4 MB** 的 **`FaceFusion-Update-CodeOnly.zip`**，直接解压覆盖到原目录即可，已下载的模型与 Google 登录授权完全保留。
+   - **首次启动全自动初始化**：控制台窗口会自动从官方国际源（GitHub Official Releases / PyPI / HuggingFace）依次安装 FFmpeg、Python 与 NVIDIA CUDA 12 / cuDNN 9 运行库及口播所需 AI 模型，全程支持字节级断点续传与 SHA-256 / CRC32 校验（下载一次永久缓存，后续启动秒开）。
+   - **自动打开界面**：初始化完成后浏览器自动打开 `http://127.0.0.1:7860`。
+4. **后续版本无感热更新（每次仅 ~0.4 MB）**：
+   - 每次双击启动软件时，会自动检测 GitHub 最新 Release 并秒级同步 `0.4 MB` 轻量代码热更新包（也可点击网页右上角 **🔄 检查在线热更新** 或双击 **`一键检查更新.cmd`**），个人配置、Google 授权与已下载环境/模型 100% 保留。
 5. 使用完毕双击 **`停止FaceFusion.cmd`** 即可关闭后台服务。
 
 ### 硬件与系统要求
@@ -43,9 +44,9 @@
 ```text
 .
 ├── app/facefusion/                 # 应用核心源码与官方模型哈希清单
-│   ├── .assets/models/*.hash       # 19 个官方模型 CRC32 校验清单（防损坏/防篡改）
+│   ├── .assets/models/*.hash       # 19 个官方模型 CRC32 校验清单（防传输损坏）
 │   ├── facefusion/
-│   │   ├── model_bootstrap.py      # 首次启动官方国际源模型自动下载与校验器
+│   │   ├── model_bootstrap.py      # 首次启动官方国际源模型自动下载与 CRC32 + SHA-256 强校验器
 │   │   ├── download.py             # 纯 Python httpx 流式下载引擎（断点续传 + 双源自动切换）
 │   │   ├── presets_manager.py      # 口播场景预设管理器
 │   │   ├── google_sheets_client.py # Google OAuth 2.0、Sheets v4 与 Drive v3 协同客户端
@@ -53,14 +54,19 @@
 │   │   ├── sheet_worker.py         # 后台任务队列、看门狗保护与自动补单调度器
 │   │   └── uis/components/         # 双页签精简版 Gradio Web 界面组件
 │   └── tests/                      # 自动化单元测试套件
-├── create-portable-zip.py          # 双轨分发打包脚本（完整便携包 + 轻量代码更新包）
+├── auto_updater.py                 # ~0.4 MB 在线代码热更新模块（启动自动同步 + SHA-256 校验）
+├── env_bootstrap.py                # 首次运行 FFmpeg 与 Python/CUDA 官方源断点续传初始化器
+├── create-portable-zip.py          # 双轨极简打包脚本（~14 MB 初始包 + ~0.4 MB 热更新包）
+├── publish-update.ps1              # 维护者一键递增版本号、打包并发布 GitHub Release 脚本
 ├── run-facefusion-portable.ps1     # 便携环境隔离与启动入口脚本
 ├── start-facefusion-background.ps1 # 后台守护启动与浏览器自动唤起脚本
 ├── stop-facefusion.ps1             # 进程安全停止脚本
-├── 后台启动FaceFusion.cmd           # 一键后台启动
+├── 后台启动FaceFusion.cmd           # 一键后台启动（含自动热更新与环境检测）
 ├── 启动FaceFusion.cmd               # 一键前台控制台启动
 ├── 停止FaceFusion.cmd               # 一键停止服务
-├── 打包分享版.cmd                   # 生成完整便携环境包 + 轻量更新包
+├── 一键检查更新.cmd                 # 用户手动检查并应用最新热更新
+├── 一键发布热更新.cmd               # 维护者 5 秒一键打包并发布新版本到 GitHub
+├── 打包分享版.cmd                   # 生成 ~14 MB 极简初始包 + ~0.4 MB 热更新包
 ├── 打包轻量更新包.cmd               # 秒级生成 ~0.4 MB 轻量代码更新包
 └── 使用说明.txt                     # 详细中文图文式操作说明
 ```
@@ -69,9 +75,10 @@
 
 ## 安全与供应链策略
 
-- **纯官方国际源直连**：模型下载与云端接口仅连接 `https://huggingface.co`、`https://github.com` 与 `https://*.googleapis.com`，不使用任何第三方镜像源。
-- **固定哈希校验**：每个下载的 `.onnx` 模型在启用前均强制比对仓库内置的 CRC32 `.hash` 校验值，不匹配或中断损坏的文件会自动拦截清理。
-- **敏感凭证硬隔离**：`.gitignore` 与 `create-portable-zip.py` 强制排除 `userdata/` 及一切 `*client_secret*.json` / `*google-token*.json` 文件，一旦检测到目录外残留凭证文件立即中止打包。
+- **纯官方国际源直连**：环境组件、模型下载与云端接口仅连接 `https://pypi.org`、`https://files.pythonhosted.org`、`https://huggingface.co`、`https://github.com` 与 `https://*.googleapis.com`，不使用任何第三方镜像源。
+- **双重哈希防篡改校验**：每个下载的 `.onnx` 核心模型在启用前均强制比对仓库内置的 CRC32 `.hash` 传输校验值与 `model_bootstrap.py` 固化的官方 **SHA-256** 密码学摘要，任何损坏或碰撞篡改文件均自动拦截清理。
+- **本地回环隔离与防 SSRF**：Web 工作台默认仅绑定 `127.0.0.1` 并启用上传缓存路径沙箱（可通过 `.env` 配置 `FACEFUSION_UI_PASSWORD` 开启登录密码）；云表格外部素材下载内置逐跳重定向 SSRF 防护与 FFmpeg 本地协议白名单。
+- **敏感凭证硬隔离**：本地 OAuth 令牌自动收紧操作系统当前用户专属读写权限；`.gitignore` 与 `create-portable-zip.py` 强制排除 `userdata/`、`.env*`、私钥及一切 `*client_secret*.json` / `*google-token*.json` 文件，一旦检测到目录外残留凭证文件立即中止打包。
 
 ---
 

@@ -33,7 +33,9 @@ from facefusion.google_sheets_client import (
     PendingOAuthSession,
     SheetTaskRow,
     _atomic_write_json,
+    is_safe_task_id,
     parse_spreadsheet_ref,
+    restrict_sensitive_file_permissions,
     sanitize_filename_stem,
 )
 from facefusion.media_normalizer import (
@@ -445,8 +447,17 @@ class SheetWorkerManager:
             active_id = self.current_task.task_id if self.current_task is not None else ''
 
         if SHEET_TEMP_ROOT.is_dir():
+            temp_root_resolved = SHEET_TEMP_ROOT.resolve()
             for child in list(SHEET_TEMP_ROOT.iterdir()):
                 if active_id and child.name == active_id:
+                    continue
+                try:
+                    if child.is_symlink():
+                        child.unlink(missing_ok=True)
+                        continue
+                    if child.resolve().parent != temp_root_resolved:
+                        continue
+                except OSError:
                     continue
                 _robust_rmtree(child, retries=2, delay_sec=0.1)
 
@@ -582,6 +593,7 @@ class SheetWorkerManager:
                 self.client_secret_copy_path.parent.mkdir(parents=True, exist_ok=True)
                 if src.resolve() != self.client_secret_copy_path.resolve():
                     shutil.copy2(src, self.client_secret_copy_path)
+                restrict_sensitive_file_permissions(self.client_secret_copy_path)
                 self.config.client_secret_path = str(self.client_secret_copy_path)
                 self.config.save(self.config_path)
                 self.ui_state_version += 1
@@ -885,10 +897,13 @@ class SheetWorkerManager:
             if self.current_task:
                 existing_ids.add(self.current_task.task_id)
             for row in claimed_rows:
-                if row.task_id in existing_ids:
+                clean_tid = (row.task_id or '').strip()
+                if not is_safe_task_id(clean_tid):
+                    continue
+                if clean_tid in existing_ids:
                     continue
                 local_task = LocalTask(
-                    task_id=row.task_id,
+                    task_id=clean_tid,
                     initial_row_number=row.row_number,
                     source_url=row.source_url,
                     target_url=row.target_url,
@@ -1352,6 +1367,17 @@ class SheetWorkerManager:
     def _run_single_task(self, task: LocalTask) -> None:
         task.started_mono = time.monotonic()
 
+        clean_task_id = (task.task_id or '').strip()
+        if not is_safe_task_id(clean_task_id):
+            task.finished_at = datetime.datetime.now().strftime('%H:%M:%S')
+            task.local_status = LOCAL_STATUS_FAILED
+            task.note = '安全拦截：任务编号包含非法字符或路径穿越片段，已拒绝执行。'
+            task.progress_detail = task.note
+            self.log(f'安全拦截：拒绝执行非法任务编号 {task.task_id!r}')
+            self.bump_ui_version()
+            return
+        task.task_id = clean_task_id
+
         preflight_block = self._check_preflight_resources()
         if preflight_block:
             task.finished_at = datetime.datetime.now().strftime('%H:%M:%S')
@@ -1366,7 +1392,11 @@ class SheetWorkerManager:
             self._trip_circuit_breaker(preflight_block, can_write_sheet=True)
             return
 
-        work_dir = SHEET_TEMP_ROOT / task.task_id
+        SHEET_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        temp_root_resolved = SHEET_TEMP_ROOT.resolve()
+        work_dir = (SHEET_TEMP_ROOT / task.task_id).resolve()
+        if work_dir.parent != temp_root_resolved:
+            raise ValueError(f'安全拦截：任务工作目录越界（{task.task_id}）')
         work_dir.mkdir(parents=True, exist_ok=True)
 
         output_file = work_dir / f'{task.task_id}_output.mp4'
@@ -1573,7 +1603,8 @@ class SheetWorkerManager:
                 elif is_drive_fatal:
                     self._trip_circuit_breaker('Google Drive 云盘空间已满或成品文件夹无写入权限', can_write_sheet=True)
         finally:
-            _robust_rmtree(work_dir)
+            if work_dir.resolve().parent == temp_root_resolved:
+                _robust_rmtree(work_dir)
 
     def _execute_headless_swap(
         self,

@@ -68,7 +68,7 @@ def run(program : ArgumentParser) -> None:
 		for line in file.readlines():
 			__line__ = line.strip()
 
-			if not __line__.startswith('onnxruntime'):
+			if __line__ and not __line__.startswith('#') and not __line__.startswith('onnxruntime'):
 				commands.append(__line__)
 
 	onnxruntime_name, onnxruntime_version = ONNXRUNTIME_SET.get(args.onnxruntime)

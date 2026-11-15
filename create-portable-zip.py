@@ -1,8 +1,9 @@
 """
-Build clean, GitHub-Release-ready distribution archives in `userdata/dist/`:
-1) `FaceFusion-Update-CodeOnly.zip` (~1-2 MB): lightweight code/UI update patch for existing installations.
-2) `FaceFusion-Portable-Windows-NVIDIA.zip` (~1.4 GB): self-contained Python + CUDA + FFmpeg environment
-   (excludes `userdata/` and `.onnx` model weights, which auto-download on first launch from official GitHub/HuggingFace CDNs).
+Build ultra-lightweight GitHub-Release-ready distribution archives in `userdata/dist/` (Scheme A + Scheme C):
+1) `FaceFusion-Update-CodeOnly.zip` (~0.4 MB): instant hot-update patch for existing installations (auto-applied on startup or UI click).
+2) `FaceFusion-Portable-Windows-NVIDIA.zip` (~14 MB): micro-portable package bundling minimal Python 3.12 stdlib + `pip` + app code.
+   On first launch, `env_bootstrap.py` and `model_bootstrap.py` automatically download FFmpeg, Python/CUDA 12/cuDNN 9 wheels,
+   and `.onnx` models from official international CDNs (GitHub / PyPI / HuggingFace) with byte-level resume and SHA-256 / CRC32 verification.
 """
 from __future__ import annotations
 
@@ -23,27 +24,7 @@ UPDATE_ARCHIVE_PATH = DIST_DIR / 'FaceFusion-Update-CodeOnly.zip'
 
 EXCLUDED_TOP_NAMES = {'userdata', '.git', '.github', '.vs', '.vscode', '.idea'}
 EXCLUDED_PART_NAMES = {'__pycache__', '.caches', '.pytest_cache', '.ruff_cache'}
-EXCLUDED_SUFFIXES = {'.pyc', '.pyo', '.onnx', '.part', '.map'}
-
-
-def _is_unused_runtime_dev_asset(rel_posix_lower: str) -> bool:
-    """Exclude non-runtime C/C++ headers, static link libs, unit-test fixtures, and SSR dev sources
-    so the portable archive stays cleanly below GitHub Releases' 2.00 GiB single-file limit."""
-    if not rel_posix_lower.startswith('runtime/'):
-        return False
-    if '/site-packages/onnx/backend/test/' in rel_posix_lower or '/site-packages/onnx/test/' in rel_posix_lower:
-        return True
-    if '/site-packages/gradio/_frontend_code/' in rel_posix_lower:
-        return True
-    if '/site-packages/gradio/templates/node/' in rel_posix_lower:
-        return True
-    if '/site-packages/nvidia/' in rel_posix_lower:
-        if '/include/' in rel_posix_lower or rel_posix_lower.endswith('.lib'):
-            return True
-    if '/site-packages/' in rel_posix_lower and '/tests/' in rel_posix_lower:
-        if any(pkg in rel_posix_lower for pkg in ('/scipy/', '/numpy/', '/pandas/', '/sympy/')):
-            return True
-    return False
+EXCLUDED_SUFFIXES = {'.pyc', '.pyo', '.onnx', '.part', '.pdb'}
 FORBIDDEN_PERSONAL_FILENAMES = {
     '.facefusion.pid',
     'facefusion.log',
@@ -54,16 +35,58 @@ FORBIDDEN_PERSONAL_FILENAMES = {
     'facefusion-sheet-worker.json',
 }
 
+# Excluded unused stdlib / Tcl-Tk / test modules from minimal portable Python core
+_EXCLUDED_PYTHON_SUBDIRS = {'include', 'libs', 'tcl', 'scripts'}
+_EXCLUDED_STDLIB_DIRS = {'test', 'tkinter', 'idlelib', 'turtledemo', 'ensurepip'}
+
 
 def _is_secret_or_personal_file(path: Path) -> bool:
     lower = path.name.lower()
-    if lower in FORBIDDEN_PERSONAL_FILENAMES:
+    if lower in ('.env.example', 'cacert.pem'):
+        return False
+    if lower == '.env' or lower.startswith('.env.'):
         return True
-    if 'client_secret' in lower and lower.endswith('.json'):
+    if lower in FORBIDDEN_PERSONAL_FILENAMES or lower == 'credentials.json':
         return True
-    if 'google-token' in lower and lower.endswith('.json'):
+    if path.suffix.lower() in {'.pem', '.key', '.pfx', '.p12'}:
+        return True
+    if lower.endswith('.json') and any(
+        kw in lower for kw in ('client_secret', 'google-token', 'service_account', 'service-account')
+    ):
         return True
     return False
+
+
+def _keep_in_minimal_python_core(rel: Path) -> bool:
+    """Keep minimal Python 3.12 interpreter + stdlib + SSL/SQLite/ctypes DLLs + `pip` (~14 MB compressed).
+    All heavy third-party `site-packages` (CUDA/cuDNN/ONNXRuntime/Gradio/etc.) are auto-bootstrapped on first launch."""
+    # Expected rel: runtime/python/...
+    if len(rel.parts) < 3 or rel.parts[1].lower() != 'python':
+        return False
+    sub_parts = rel.parts[2:]
+    sub_low = [p.lower() for p in sub_parts]
+
+    if sub_low[0] in _EXCLUDED_PYTHON_SUBDIRS:
+        return False
+
+    if sub_low[0] == 'dlls' and len(sub_low) >= 2:
+        fn = sub_low[1]
+        if fn.startswith(('tcl', 'tk', '_tkinter', '_test', '_ctypes_test')):
+            return False
+        return True
+
+    if sub_low[0] == 'lib':
+        if len(sub_low) >= 2 and sub_low[1] in _EXCLUDED_STDLIB_DIRS:
+            return False
+        if len(sub_low) >= 2 and sub_low[1] == 'site-packages':
+            # Keep ONLY `pip` and `pip-*.dist-info` so `python -m pip install --no-index` works offline on downloaded wheels!
+            if len(sub_low) < 3:
+                return False
+            pkg_entry = sub_low[2]
+            return pkg_entry == 'pip' or pkg_entry.startswith('pip-')
+        return True
+
+    return True
 
 
 def collect_shareable_files(*, include_runtime_and_tools: bool) -> list[Path]:
@@ -75,19 +98,17 @@ def collect_shareable_files(*, include_runtime_and_tools: bool) -> list[Path]:
         top = rel.parts[0]
         if top in EXCLUDED_TOP_NAMES:
             continue
-        if not include_runtime_and_tools and top in {'runtime', 'tools'}:
+        # FFmpeg (`tools/`) is excluded from both archives and auto-downloaded on first run by `env_bootstrap.py`
+        if top == 'tools':
             continue
+        if top == 'runtime':
+            if not include_runtime_and_tools:
+                continue
+            if not _keep_in_minimal_python_core(rel):
+                continue
         if any(part in EXCLUDED_PART_NAMES for part in rel.parts):
             continue
         if path.suffix.lower() in EXCLUDED_SUFFIXES:
-            continue
-        # Strip unused ffplay.exe (~105 MB) and HTML docs from bundled FFmpeg
-        if top == 'tools':
-            if path.name.lower() == 'ffplay.exe':
-                continue
-            if 'doc' in [p.lower() for p in rel.parts]:
-                continue
-        if _is_unused_runtime_dev_asset(rel.as_posix().lower()):
             continue
         if _is_secret_or_personal_file(path):
             raise RuntimeError(f'检测到根目录外存在个人配置或密钥文件，已中止打包：{rel}')
@@ -129,7 +150,7 @@ def build_zip_archive(
             arc_name = f'{arc_prefix}/{rel_posix}' if arc_prefix else rel_posix
             zf.write(file_path, arc_name)
             written_bytes += file_path.stat().st_size
-            if idx % 1500 == 0 or idx == len(files) or time.monotonic() - last_print >= 12:
+            if idx % 500 == 0 or idx == len(files) or time.monotonic() - last_print >= 8:
                 pct = (written_bytes / total_bytes * 100.0) if total_bytes else 100.0
                 print(f'    进度：{idx}/{len(files)} ({pct:.1f}%)', flush=True)
                 last_print = time.monotonic()
@@ -161,9 +182,9 @@ def build_zip_archive(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='Create slim portable & update ZIP packages.')
-    parser.add_argument('--update-only', action='store_true', help='Only build the ~2 MB code update package.')
-    parser.add_argument('--full-only', action='store_true', help='Only build the slim full environment package.')
+    parser = argparse.ArgumentParser(description='Create micro-portable & hot-update ZIP packages.')
+    parser.add_argument('--update-only', action='store_true', help='Only build the ~0.4 MB code hot-update package.')
+    parser.add_argument('--full-only', action='store_true', help='Only build the ~14 MB micro-portable package.')
     args = parser.parse_args(argv)
 
     build_update = not args.full_only
@@ -175,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             update_files,
             UPDATE_ARCHIVE_PATH,
             arc_prefix=None,
-            label='轻量代码更新包（给已安装成员覆盖升级用）'
+            label='轻量代码热更新包（~0.4 MB，启动自动同步 / 覆盖升级用）'
         )
 
     if build_full:
@@ -184,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             full_files,
             FULL_ARCHIVE_PATH,
             arc_prefix=FULL_FOLDER_NAME,
-            label='完整运行环境包（不含 .onnx 模型，首次启动自动从官方源下载）'
+            label='极简便携初始包（~14 MB，首次启动自动从官方源安装环境与模型）'
         )
 
     return 0

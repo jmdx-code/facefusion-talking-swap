@@ -16,6 +16,11 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from PIL import Image, ImageOps
 
 NORMALIZE_IDLE_TIMEOUT_SEC = 300.0
+MAX_SOURCE_IMAGE_PIXELS = 64_000_000
+SAFE_PILLOW_IMAGE_FORMATS = ['JPEG', 'PNG', 'WEBP', 'BMP']
+FFMPEG_LOCAL_PROTOCOL_WHITELIST = 'file,pipe,crypto,data'
+
+Image.MAX_IMAGE_PIXELS = MAX_SOURCE_IMAGE_PIXELS
 
 
 def terminate_process_tree(proc: Any) -> None:
@@ -113,6 +118,7 @@ def _decode_image_via_ffmpeg(image_path: Path, work_dir: Path) -> Path:
     proc = subprocess.run(
         [
             ffmpeg_bin, '-y', '-hide_banner', '-loglevel', 'error',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOL_WHITELIST,
             '-i', str(image_path),
             '-frames:v', '1',
             '-pix_fmt', 'yuvj420p',
@@ -141,14 +147,16 @@ def prepare_source_image(image_path: Path, work_dir: Path, max_edge: int = 3000)
     used_ffmpeg_fallback = False
     open_target = path
     try:
-        with Image.open(open_target) as probe:
+        with Image.open(open_target, formats=SAFE_PILLOW_IMAGE_FORMATS) as probe:
             probe.load()
+    except Image.DecompressionBombError as exc:
+        raise ValueError('源人脸图片像素尺寸异常过大（疑似解压炸弹），已拒绝解析。') from exc
     except Exception:
         open_target = _decode_image_via_ffmpeg(path, work_dir)
         used_ffmpeg_fallback = True
 
     try:
-        with Image.open(open_target) as img:
+        with Image.open(open_target, formats=SAFE_PILLOW_IMAGE_FORMATS) as img:
             img.load()
             exif = img.getexif()
             orientation = int(exif.get(274, 1)) if exif else 1
@@ -198,7 +206,11 @@ def inspect_video(video_path: Path, max_long_edge: int = 1920) -> VideoInspectio
 
     ffprobe_bin = _resolve_tool_binary('ffprobe')
     proc = subprocess.run(
-        [ffprobe_bin, '-v', 'error', '-show_format', '-show_streams', '-of', 'json', str(path)],
+        [
+            ffprobe_bin, '-v', 'error',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOL_WHITELIST,
+            '-show_format', '-show_streams', '-of', 'json', str(path)
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -320,6 +332,7 @@ def inspect_and_normalize_video(
         remux_path = work_dir / 'target_remuxed.mp4'
         remux_cmd = [
             ffmpeg_bin, '-y', '-hide_banner', '-loglevel', 'error',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOL_WHITELIST,
             '-i', str(video_path),
             '-map', '0:v:0'
         ]
@@ -388,6 +401,7 @@ def inspect_and_normalize_video(
             '-loglevel', 'error',
             '-progress', 'pipe:1',
             '-nostats',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOL_WHITELIST,
             '-i', str(video_path),
             *video_encode_args,
             '-r', str(fps_value),

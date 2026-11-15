@@ -1522,10 +1522,193 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         full_files = packager.collect_shareable_files(include_runtime_and_tools=True)
         full_rels = [p.relative_to(repo_root).as_posix() for p in full_files]
         self.assertTrue(all(not r.startswith('userdata/') for r in full_rels))
+        self.assertTrue(all(not r.startswith('tools/') for r in full_rels), 'FFmpeg is bootstrapped on first run')
         self.assertTrue(all(not r.endswith('.onnx') for r in full_rels))
-        self.assertTrue(all(not r.lower().endswith('/ffplay.exe') for r in full_rels))
         self.assertIn('runtime/python/python.exe', full_rels)
-        self.assertTrue(any(r.lower().endswith('/ffmpeg.exe') for r in full_rels))
+        self.assertIn('runtime/python/Lib/site-packages/pip/__init__.py', full_rels)
+        self.assertTrue(all('/site-packages/nvidia/' not in r for r in full_rels))
+        self.assertTrue(all('/site-packages/onnxruntime/' not in r for r in full_rels))
+
+    def test_auto_updater_and_env_bootstrap_wheel_selection(self) -> None:
+        import hashlib
+        import importlib.util
+        import zipfile
+        from unittest.mock import patch
+
+        repo_root = Path(__file__).resolve().parents[3]
+
+        # 1. Load auto_updater.py & verify semver, zip path-traversal guard, and SHA-256 atomic hot update
+        au_spec = importlib.util.spec_from_file_location('auto_updater_test_mod', repo_root / 'auto_updater.py')
+        assert au_spec is not None and au_spec.loader is not None
+        au = importlib.util.module_from_spec(au_spec)
+        au_spec.loader.exec_module(au)
+
+        self.assertTrue(au.is_newer_version('v1.1.1', '1.1.0'))
+        self.assertTrue(au.is_newer_version('1.10.0', '1.2.9'))
+        self.assertFalse(au.is_newer_version('v1.1.0', '1.1.0'))
+        self.assertFalse(au.is_newer_version('1.0.9', '1.1.0'))
+
+        sim_root = self.tmp_path / 'sim_install'
+        (sim_root / 'userdata').mkdir(parents=True, exist_ok=True)
+        (sim_root / 'VERSION').write_text('1.1.0\n', encoding='utf-8')
+        precious_secret = sim_root / 'userdata' / 'facefusion-google-token.json'
+        precious_secret.write_text('{"refresh_token":"keep-me"}', encoding='utf-8')
+
+        # Malicious zip attempting to overwrite userdata/ must be rejected!
+        evil_zip = self.tmp_path / 'evil_update.zip'
+        with zipfile.ZipFile(evil_zip, 'w') as zf:
+            zf.writestr('userdata/facefusion-google-token.json', 'hacked')
+        with self.assertRaisesRegex(ValueError, '拒绝覆盖受保护目录'):
+            au.validate_and_extract_update_zip(evil_zip, sim_root)
+        self.assertIn('keep-me', precious_secret.read_text(encoding='utf-8'))
+
+        # Valid signed 0.4 MB code hot-update (`1.1.0` -> `1.2.0`)
+        good_zip = self.tmp_path / 'good_update.zip'
+        with zipfile.ZipFile(good_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('VERSION', '1.2.0\n')
+            zf.writestr('app/facefusion/hot_patched.txt', 'hello-v1.2.0')
+        good_bytes = good_zip.read_bytes()
+        good_sha = hashlib.sha256(good_bytes).hexdigest()
+
+        fake_release = {
+            'tag_name': 'v1.2.0',
+            'html_url': 'https://github.com/jmdx-code/facefusion-talking-swap/releases/tag/v1.2.0',
+            'assets': [
+                {
+                    'name': 'FaceFusion-Update-CodeOnly.zip',
+                    'browser_download_url': 'https://github.com/jmdx-code/facefusion-talking-swap/releases/download/v1.2.0/FaceFusion-Update-CodeOnly.zip',
+                    'digest': f'sha256:{good_sha}',
+                }
+            ],
+        }
+        with (
+            patch.object(au, 'fetch_latest_release_metadata', return_value=fake_release),
+            patch.object(au, '_http_get_bytes', return_value=good_bytes),
+        ):
+            res = au.check_and_apply_update(apply_update=True, target_root=sim_root)
+            self.assertEqual(res.status, 'updated')
+            self.assertEqual(au.read_local_version(sim_root), '1.2.0')
+            self.assertEqual((sim_root / 'app' / 'facefusion' / 'hot_patched.txt').read_text(encoding='utf-8'), 'hello-v1.2.0')
+            self.assertIn('keep-me', precious_secret.read_text(encoding='utf-8'))
+
+        # 2. Load env_bootstrap.py & verify wheel selector priority and SHA-256 resume downloader
+        eb_spec = importlib.util.spec_from_file_location('env_bootstrap_test_mod', repo_root / 'env_bootstrap.py')
+        assert eb_spec is not None and eb_spec.loader is not None
+        eb = importlib.util.module_from_spec(eb_spec)
+        eb_spec.loader.exec_module(eb)
+
+        sample_urls = [
+            {'packagetype': 'sdist', 'filename': 'pkg-1.0.tar.gz', 'url': 'https://files.pythonhosted.org/s.tar.gz', 'digests': {'sha256': '11' * 32}},
+            {'packagetype': 'bdist_wheel', 'filename': 'pkg-1.0-cp312-cp312-manylinux_2_17_x86_64.whl', 'url': 'https://files.pythonhosted.org/linux.whl', 'digests': {'sha256': '22' * 32}},
+            {'packagetype': 'bdist_wheel', 'filename': 'pkg-1.0-cp311-cp311-win_amd64.whl', 'url': 'https://files.pythonhosted.org/py311.whl', 'digests': {'sha256': '33' * 32}},
+            {'packagetype': 'bdist_wheel', 'filename': 'pkg-1.0-py3-none-any.whl', 'url': 'https://files.pythonhosted.org/any.whl', 'digests': {'sha256': '44' * 32}},
+            {'packagetype': 'bdist_wheel', 'filename': 'pkg-1.0-cp312-cp312-win_amd64.whl', 'url': 'https://files.pythonhosted.org/win312.whl', 'digests': {'sha256': '55' * 32}},
+        ]
+        chosen = eb.select_best_wheel_from_pypi(sample_urls, py_nodot='312')
+        self.assertEqual(chosen, ('pkg-1.0-cp312-cp312-win_amd64.whl', 'https://files.pythonhosted.org/win312.whl', '55' * 32))
+
+    def test_security_hardening_guards(self) -> None:
+        import importlib.util
+        from unittest.mock import MagicMock, patch
+        from gradio.exceptions import InvalidPathError
+        from facefusion import google_sheets_client as gsc
+        from facefusion.uis import overrides as uis_overrides
+        from facefusion.uis.components import sheet_worker as sw_ui
+
+        # 1. Path traversal task_id rejection (protects SHEET_TEMP_ROOT / task_id deletion)
+        for bad_id in ('', '..', '../..', '../../userdata', 'a/b', r'a\b', r'D:\important', '.hidden'):
+            self.assertFalse(gsc.is_safe_task_id(bad_id), f'Must reject unsafe task_id: {bad_id!r}')
+        self.assertTrue(gsc.is_safe_task_id('FF-1115-120000-ABCD'))
+
+        victim_dir = self.tmp_path / 'must_survive'
+        victim_dir.mkdir(parents=True, exist_ok=True)
+        sentinel = victim_dir / 'precious.txt'
+        sentinel.write_text('keep', encoding='utf-8')
+
+        rows = [
+            ['源人脸图片', '目标视频', '任务编号', '任务状态', '领取节点', '成品链接', '处理备注'],
+            ['https://ex.com/s.jpg', 'https://ex.com/v.mp4', '..', SHEET_STATUS_IN_PROGRESS, 'Worker-Sec', '', ''],
+        ]
+        sim = InMemorySheetsHttp(rows)
+        coord = GoogleSheetsCoordinator(self.oauth, '1AbCdEfGhIjKlMnOpQrStUvWxYz', http_helper=sim)
+        self.assertEqual(coord.find_owned_in_progress_tasks('Worker-Sec'), [])
+
+        mgr = sheet_worker.SheetWorkerManager(
+            config_path=self.tmp_path / 'sec_cfg.json',
+            token_path=self.token_path
+        )
+        mgr.ensure_background_threads = lambda: None  # type: ignore[method-assign]
+        evil_task = sheet_worker.LocalTask('..', 2, 'https://ex.com/s.jpg', 'https://ex.com/v.mp4', '没问题选这个', '断点恢复')
+        mgr._run_single_task(evil_task)
+        self.assertEqual(evil_task.local_status, sheet_worker.LOCAL_STATUS_FAILED)
+        self.assertTrue(sentinel.is_file(), 'Parent directory outside SHEET_TEMP_ROOT must never be deleted!')
+
+        # 2. SSRF direct & 302-redirect protection + safe media extension filter
+        for unsafe_url in (
+            'http://127.0.0.1:7860/gradio_api/info',
+            'http://localhost:8080/test.mp4',
+            'http://169.254.169.254/latest/meta-data/',
+            'http://192.168.1.1/router.jpg',
+            'http://10.0.0.5/internal.mp4',
+            'file:///C:/Windows/win.ini',
+        ):
+            with self.assertRaisesRegex(ValueError, '安全拦截'):
+                gsc._validate_safe_external_media_url(unsafe_url)
+
+        class _FakeRedirectClient:
+            def __enter__(self) -> '_FakeRedirectClient':
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+            def stream(self, _method: str, req_url: str, **_kw: Any) -> Any:
+                ctx = MagicMock()
+                resp = MagicMock()
+                resp.status_code = 302
+                resp.headers = {'Location': 'http://127.0.0.1:7860/internal'}
+                ctx.__enter__.return_value = resp
+                ctx.__exit__.return_value = None
+                return ctx
+
+        drive = GoogleDriveClient(self.oauth)
+        with patch.object(gsc, '_make_http_client', side_effect=lambda **_kw: _FakeRedirectClient()):
+            with self.assertRaisesRegex(ValueError, '安全拦截'):
+                drive._download_from_http('https://cdn.example.com/redir.mp4', self.tmp_path / 'ssrf_dl', 'raw_target', '.mp4', None)
+
+        self.assertEqual(gsc._sanitize_media_extension('.m3u8', '.mp4'), '.mp4')
+        self.assertEqual(gsc._sanitize_media_extension('.eps', '.jpg'), '.jpg')
+        self.assertEqual(gsc._sanitize_media_extension('.png', '.jpg'), '.png')
+
+        # 3. Gradio path guard blocks credentials & arbitrary client reads while allowing manual_outputs postprocess
+        with self.assertRaises(InvalidPathError):
+            uis_overrides.check_allowed_path(self.token_path, False)
+        with self.assertRaises(InvalidPathError):
+            uis_overrides.check_allowed_path(r'\\evil-server\share\file.mp4', False)
+
+        # 4. Markdown/HTML escaping in Sheet UI link helper & packager secret filter
+        escaped_non_url = sw_ui._md_link('<img src=x onerror=alert(1)>')
+        self.assertNotIn('<img', escaped_non_url)
+        safe_md = sw_ui._md_link('https://example.com/a)[x](javascript:alert(1))')
+        self.assertNotIn(')[', safe_md)
+
+        repo_root = Path(__file__).resolve().parents[3]
+        spec = importlib.util.spec_from_file_location('create_portable_zip_sec', repo_root / 'create-portable-zip.py')
+        assert spec is not None and spec.loader is not None
+        packager = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(packager)
+        self.assertTrue(packager._is_secret_or_personal_file(Path('.env')))
+        self.assertTrue(packager._is_secret_or_personal_file(Path('.env.production')))
+        self.assertTrue(packager._is_secret_or_personal_file(Path('server.key')))
+        self.assertTrue(packager._is_secret_or_personal_file(Path('my-service_account.json')))
+        self.assertFalse(packager._is_secret_or_personal_file(Path('.env.example')))
+
+        # 5. Pinned SHA-256 model tamper guard rejects forged payload for known preset model names
+        from facefusion import model_bootstrap
+        self.assertEqual(len(model_bootstrap.PINNED_MODEL_SHA256), 19)
+        fake_yolo = self.tmp_path / 'yoloface_8n.onnx'
+        fake_yolo.write_bytes(b'tampered_onnx_weights')
+        self.assertFalse(model_bootstrap.validate_model_sha256(str(fake_yolo)))
 
 
 if __name__ == '__main__':

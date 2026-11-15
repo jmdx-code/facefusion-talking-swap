@@ -1,7 +1,10 @@
+import html
+
 import gradio
 
-from facefusion import metadata, state_manager
-from facefusion.uis.components import about, age_modifier_options, background_remover_options, deep_swapper_options, download, execution, execution_thread_count, expression_restorer_options, face_debugger_options, face_detector, face_editor_options, face_enhancer_options, face_landmarker, face_masker, face_selector, face_swapper_options, face_tracker, frame_colorizer_options, frame_enhancer_options, instant_runner, job_manager, job_runner, lip_syncer_options, memory, output, output_options, presets, preview, preview_options, processors, sheet_worker, source, target, temp_frame, terminal, trim_frame, ui_workflow, voice_extractor, workflow
+from facefusion import metadata
+from facefusion.uis.components import about, age_modifier_options, background_remover_options, deep_swapper_options, download, execution, execution_thread_count, expression_restorer_options, face_debugger_options, face_detector, face_editor_options, face_enhancer_options, face_landmarker, face_masker, face_selector, face_swapper_options, face_tracker, frame_colorizer_options, frame_enhancer_options, instant_runner, job_manager, job_runner, lip_syncer_options, memory, output, output_options, presets, preview, preview_options, processors, sheet_worker, source, target, temp_frame, terminal, trim_frame, ui_workflow, updater_bar, voice_extractor, workflow
+from facefusion.uis.core import launch_gradio_ui
 
 
 def pre_check() -> bool:
@@ -9,12 +12,12 @@ def pre_check() -> bool:
 
 
 def _step_header(num: str, title: str, hint: str = '') -> None:
-	hint_html = f'<span class="ff-step-hint">{hint}</span>' if hint else ''
+	hint_html = f'<span class="ff-step-hint">{html.escape(hint)}</span>' if hint else ''
 	gradio.HTML(
 		f'<div class="ff-step-head">'
 		f'<div class="ff-step-head-left">'
-		f'<span class="ff-step-badge">{num}</span>'
-		f'<span class="ff-step-title">{title}</span>'
+		f'<span class="ff-step-badge">{html.escape(num)}</span>'
+		f'<span class="ff-step-title">{html.escape(title)}</span>'
 		f'</div>'
 		f'{hint_html}'
 		f'</div>',
@@ -23,20 +26,8 @@ def _step_header(num: str, title: str, hint: str = '') -> None:
 
 
 def render() -> gradio.Blocks:
-	version = metadata.get('version')
 	with gradio.Blocks() as layout:
-		gradio.HTML(
-			f'<div class="ff-studio-bar">'
-			f'<div class="ff-studio-brand">'
-			f'<span class="ff-studio-logo">FF</span>'
-			f'<div>'
-			f'<div class="ff-studio-title">FaceFusion 口播换脸工作台 <span style="font-weight:500;font-size:0.8rem;color:#64748b;">v{version}</span></div>'
-			f'<div class="ff-studio-sub">日常单条快速换脸 · Google 云表格团队协同接单</div>'
-			f'</div>'
-			f'</div>'
-			f'</div>',
-			padding = False
-		)
+		updater_bar.render()
 
 		with gradio.Tabs(elem_classes = [ 'ff-main-tabs' ]):
 			with gradio.Tab('🎬 手动精细换脸'):
@@ -167,7 +158,8 @@ def listen() -> None:
 	workflow.listen()
 	presets.listen()
 	sheet_worker.listen()
+	updater_bar.listen()
 
 
 def run(ui : gradio.Blocks) -> None:
-	ui.launch(favicon_path = 'facefusion.ico', inbrowser = state_manager.get_item('open_browser'))
+	launch_gradio_ui(ui)

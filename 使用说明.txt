@@ -6,9 +6,10 @@ FaceFusion 3.9.0 Windows NVIDIA 独立便携版（含云表格协同任务中心
 2. NVIDIA 显卡并已安装官方显卡驱动（建议 8GB 及以上显存）。
 3. 建议 16GB 以上内存，预留至少 15GB 磁盘可用空间用于模型缓存与长视频处理。
 
-首次启动与自动模型下载
-1. 为大幅缩减分发压缩包体积，分享包内置完整 Python + CUDA/cuDNN + FFmpeg 环境，但不打包 `.onnx` 模型权重文件。
-2. 首次双击“后台启动FaceFusion.cmd”（或“启动FaceFusion.cmd”）时，控制台会自动从官方国际源（HuggingFace / GitHub Official Releases）下载所需模型至 `userdata\models\`，并逐一进行本地 CRC32 哈希完整性校验（支持断点续传；下载一次永久缓存，后续启动免下载，覆盖升级代码也不会丢失模型）。
+首次启动与自动环境/模型初始化
+1. 为实现秒级分发，初始分享包（仅约 14 MB）内置最小化 Python 3.12 核心启动器与全套口播换脸工作台代码。
+2. 首次双击“后台启动FaceFusion.cmd”（或“启动FaceFusion.cmd”）时，控制台会自动从官方国际源（GitHub Official Releases / PyPI / HuggingFace）依次安装 FFmpeg、Python 与 NVIDIA CUDA 12 / cuDNN 9 运行库及所需 AI 模型（`userdata\models\`），全程支持字节级断点续传与 SHA-256 / CRC32 校验（下载一次永久缓存，后续启动秒开）。
+3. 每次启动时会自动检测 GitHub 最新版本并秒级同步约 0.4 MB 的代码热更新包（也可点击网页右上角“🔄 检查在线热更新”或双击“一键检查更新.cmd”），个人授权与已下载环境/模型均完好保留。
 
 日常使用
 1. 双击“后台启动FaceFusion.cmd”（或“启动FaceFusion.cmd”）。
@@ -20,9 +21,9 @@ FaceFusion 3.9.0 Windows NVIDIA 独立便携版（含云表格协同任务中心
 
 目录隔离与两种分发打包方式
 - 本机所有个人数据、Google OAuth 登录凭证、自定义场景预设、首次自动下载的模型权重（`userdata\models`）、运行日志、临时缓存及本地留存成品，全部集中在根目录下的 `userdata` 文件夹中，启动时自动创建，不会修改系统目录或注册表，也不会自动读取电脑主机名。
-- 给团队成员分发或升级时：
-  - 给新成员首次安装：双击根目录下的“打包分享版.cmd”，会在 `userdata\dist\` 下自动生成干净完整的 `FaceFusion-Portable-Windows-NVIDIA.zip`（约 1.4 GB，含完整 Python/CUDA/FFmpeg 环境，自动排除个人 `userdata` 与 `.onnx` 大体积权重）以及轻量更新包。
-  - 给已安装成员升级代码/界面：双击根目录下的“打包轻量更新包.cmd”，1~2 秒即可生成 `userdata\dist\FaceFusion-Update-CodeOnly.zip`（仅约 1~2 MB），成员直接解压覆盖到原目录即可完成升级，原有的 Google 登录状态和已下载模型全部保留。
+- 给团队成员分发或日常发版更新时：
+  - 维护者一键发版（最省心）：修改代码后双击“一键发布热更新.cmd”，数秒内即可自动递增版本号、生成 ~0.4 MB 热更新包与 ~14 MB 初始包并发布到 GitHub Releases；所有已安装成员下次启动软件会自动秒级热更新。
+  - 本地离线打包：双击“打包分享版.cmd”会在 `userdata\dist\` 下生成 `FaceFusion-Portable-Windows-NVIDIA.zip`（约 14 MB，给新成员首次安装）与 `FaceFusion-Update-CodeOnly.zip`（约 0.4 MB，给老成员覆盖升级）。
 
 一、手动精细换脸与场景参数预设
 - ✨ 没问题选这个：默认推荐参数，InSwapper FP16 + 上下半脸恢复80 + GFPGAN混合65。
