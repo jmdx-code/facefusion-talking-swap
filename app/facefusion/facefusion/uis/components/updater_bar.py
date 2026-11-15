@@ -14,7 +14,7 @@ UPDATE_BUTTON : Optional[gradio.Button] = None
 
 def _load_auto_updater() -> Any:
 	repo_root = Path(__file__).resolve().parents[5]
-	script_path = repo_root / 'auto_updater.py'
+	script_path = repo_root / 'app' / 'scripts' / 'auto_updater.py'
 	if not script_path.is_file():
 		return None
 	spec = importlib.util.spec_from_file_location('ff_root_auto_updater', script_path)

@@ -1,9 +1,8 @@
 """
-Build ultra-lightweight GitHub-Release-ready distribution archives in `userdata/dist/` (Scheme A + Scheme C):
-1) `FaceFusion-Update-CodeOnly.zip` (~0.4 MB): instant hot-update patch for existing installations (auto-applied on startup or UI click).
-2) `FaceFusion-Portable-Windows-NVIDIA.zip` (~14 MB): micro-portable package bundling minimal Python 3.12 stdlib + `pip` + app code.
-   On first launch, `env_bootstrap.py` and `model_bootstrap.py` automatically download FFmpeg, Python/CUDA 12/cuDNN 9 wheels,
-   and `.onnx` models from official international CDNs (GitHub / PyPI / HuggingFace) with byte-level resume and SHA-256 / CRC32 verification.
+Build ultra-lightweight GitHub-Release-ready distribution archives in `userdata/dist/`:
+1) `FaceFusion-Update-CodeOnly.zip` (~0.4 MB): instant hot-update patch for existing installations.
+2) `FaceFusion-Portable-Windows-NVIDIA.zip` (~12 MB): micro-portable package with ultra-clean root directory
+   (`app/`, `runtime/`, `启动FaceFusion.cmd`, `停止FaceFusion.cmd`, `使用说明.txt`).
 """
 from __future__ import annotations
 
@@ -14,7 +13,8 @@ import time
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+# File lives at `<ROOT>/app/scripts/create-portable-zip.py` -> parents[2] is `<ROOT>`
+ROOT = Path(__file__).resolve().parents[2]
 USERDATA = ROOT / 'userdata'
 DIST_DIR = USERDATA / 'dist'
 
@@ -22,7 +22,8 @@ FULL_FOLDER_NAME = 'FaceFusion-Portable-Windows-NVIDIA'
 FULL_ARCHIVE_PATH = DIST_DIR / f'{FULL_FOLDER_NAME}.zip'
 UPDATE_ARCHIVE_PATH = DIST_DIR / 'FaceFusion-Update-CodeOnly.zip'
 
-EXCLUDED_TOP_NAMES = {'userdata', '.git', '.github', '.vs', '.vscode', '.idea'}
+EXCLUDED_TOP_NAMES = {'userdata', '_维护者工具', '.git', '.github', '.vs', '.vscode', '.idea'}
+EXCLUDED_ROOT_FILES = {'.gitignore', 'readme.md'}
 EXCLUDED_PART_NAMES = {'__pycache__', '.caches', '.pytest_cache', '.ruff_cache'}
 EXCLUDED_SUFFIXES = {'.pyc', '.pyo', '.onnx', '.part', '.pdb'}
 FORBIDDEN_PERSONAL_FILENAMES = {
@@ -35,7 +36,6 @@ FORBIDDEN_PERSONAL_FILENAMES = {
     'facefusion-sheet-worker.json',
 }
 
-# Excluded unused stdlib / Tcl-Tk / test modules from minimal portable Python core
 _EXCLUDED_PYTHON_SUBDIRS = {'include', 'libs', 'tcl', 'scripts'}
 _EXCLUDED_STDLIB_DIRS = {'test', 'tkinter', 'idlelib', 'turtledemo', 'ensurepip'}
 
@@ -58,9 +58,6 @@ def _is_secret_or_personal_file(path: Path) -> bool:
 
 
 def _keep_in_minimal_python_core(rel: Path) -> bool:
-    """Keep minimal Python 3.12 interpreter + stdlib + SSL/SQLite/ctypes DLLs + `pip` (~14 MB compressed).
-    All heavy third-party `site-packages` (CUDA/cuDNN/ONNXRuntime/Gradio/etc.) are auto-bootstrapped on first launch."""
-    # Expected rel: runtime/python/...
     if len(rel.parts) < 3 or rel.parts[1].lower() != 'python':
         return False
     sub_parts = rel.parts[2:]
@@ -79,7 +76,6 @@ def _keep_in_minimal_python_core(rel: Path) -> bool:
         if len(sub_low) >= 2 and sub_low[1] in _EXCLUDED_STDLIB_DIRS:
             return False
         if len(sub_low) >= 2 and sub_low[1] == 'site-packages':
-            # Keep ONLY `pip` and `pip-*.dist-info` so `python -m pip install --no-index` works offline on downloaded wheels!
             if len(sub_low) < 3:
                 return False
             pkg_entry = sub_low[2]
@@ -98,7 +94,8 @@ def collect_shareable_files(*, include_runtime_and_tools: bool) -> list[Path]:
         top = rel.parts[0]
         if top in EXCLUDED_TOP_NAMES:
             continue
-        # FFmpeg (`tools/`) is excluded from both archives and auto-downloaded on first run by `env_bootstrap.py`
+        if len(rel.parts) == 1 and top.lower() in EXCLUDED_ROOT_FILES:
+            continue
         if top == 'tools':
             continue
         if top == 'runtime':
@@ -184,7 +181,7 @@ def build_zip_archive(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Create micro-portable & hot-update ZIP packages.')
     parser.add_argument('--update-only', action='store_true', help='Only build the ~0.4 MB code hot-update package.')
-    parser.add_argument('--full-only', action='store_true', help='Only build the ~14 MB micro-portable package.')
+    parser.add_argument('--full-only', action='store_true', help='Only build the ~12 MB micro-portable package.')
     args = parser.parse_args(argv)
 
     build_update = not args.full_only
@@ -205,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
             full_files,
             FULL_ARCHIVE_PATH,
             arc_prefix=FULL_FOLDER_NAME,
-            label='极简便携初始包（~14 MB，首次启动自动从官方源安装环境与模型）'
+            label='极简便携初始包（~12 MB，首次启动自动从官方源安装环境与模型）'
         )
 
     return 0

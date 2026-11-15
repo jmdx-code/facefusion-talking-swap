@@ -1,8 +1,9 @@
 ﻿$ErrorActionPreference = 'Stop'
-$packageRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
+# File lives at `<ROOT>\app\scripts\start-facefusion-background.ps1`
+$packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $portablePython = [System.IO.Path]::GetFullPath((Join-Path $packageRoot 'runtime\python\python.exe'))
-$autoUpdater = Join-Path $packageRoot 'auto_updater.py'
-$envBootstrap = Join-Path $packageRoot 'env_bootstrap.py'
+$autoUpdater = Join-Path $PSScriptRoot 'auto_updater.py'
+$envBootstrap = Join-Path $PSScriptRoot 'env_bootstrap.py'
 $logsDir = Join-Path $packageRoot 'userdata\logs'
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
 $pidFile = Join-Path $logsDir '.facefusion.pid'
@@ -56,7 +57,6 @@ if (Test-LocalWebReady 'http://127.0.0.1:7860' 1500) {
     exit 0
 }
 
-# Rotate redirected log files if larger than 10 MB to prevent unbounded disk growth
 $maxLogBytes = 10MB
 foreach ($targetLog in @($logFile, $errorLog)) {
     if (Test-Path -LiteralPath $targetLog) {
@@ -68,10 +68,6 @@ foreach ($targetLog in @($logFile, $errorLog)) {
     }
 }
 
-# Visible console preflight BEFORE spawning hidden background server:
-# 1) Scheme A: Automatic silent 0.4 MB code hot-update from official GitHub Releases
-# 2) Scheme C: First-run FFmpeg + Python/CUDA runtime bootstrap from official GitHub/PyPI
-# 3) First-run AI .onnx model bootstrap from official HuggingFace/GitHub
 $sourceDir = Join-Path $packageRoot 'app\facefusion'
 $userDataDir = Join-Path $packageRoot 'userdata'
 $pyCacheDir = Join-Path $userDataDir 'pycache'
@@ -111,7 +107,7 @@ finally {
 }
 
 Write-Host '正在后台启动 FaceFusion 服务，启动完成后将自动打开浏览器...'
-$launcher = Join-Path $packageRoot 'run-facefusion-portable.ps1'
+$launcher = Join-Path $PSScriptRoot 'run-facefusion-portable.ps1'
 $argumentLine = '-NoProfile -ExecutionPolicy Bypass -File "' + $launcher + '" -SkipPreflight run --execution-providers cuda --execution-thread-count 2 --video-memory-strategy moderate --workflow-strategy disk --temp-frame-format jpeg --processors face_swapper expression_restorer face_enhancer --face-selector-mode one --face-swapper-model inswapper_128_fp16 --face-swapper-pixel-boost 128x128 --face-swapper-weight 0.5 --expression-restorer-model live_portrait --expression-restorer-factor 80 --expression-restorer-areas upper-face lower-face --face-enhancer-model gfpgan_1.4 --face-enhancer-blend 65 --face-mask-types box --face-mask-blur 0.65 --output-video-encoder h264_nvenc --output-audio-encoder aac --output-video-quality 90'
 $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentLine -WorkingDirectory $packageRoot -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errorLog -PassThru
 Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ascii

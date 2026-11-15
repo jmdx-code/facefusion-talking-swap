@@ -4,15 +4,7 @@ FaceFusion portable distribution notice
 FaceFusion 3.9.0 is distributed under the OpenRAIL-AS license.
 The original license file is included at app\facefusion\LICENSE.md.
 
-The bundled models retain their individual licenses. According to the FaceFusion
-license catalog at the time this package was built:
-
-- INSwapper: Non-Commercial
-- ArcFace / RetinaFace / SCRFD assets: Non-Commercial where applicable
-- GFPGAN: Apache-2.0
-- LivePortrait: MIT
-
-Other downloaded FaceFusion assets may have separate licenses. Review the current
+Downloaded models retain their individual licenses. Review the current
 official catalog before redistribution or commercial use:
 https://docs.facefusion.io/introduction/licenses
 

@@ -1,8 +1,9 @@
 # =====================================================================
-# Personal data, OAuth credentials, downloaded models, logs & builds
+# Personal data, local maintainer tools, OAuth credentials & logs
 # =====================================================================
 /userdata/
 **/userdata/
+/_维护者工具/
 *client_secret*.json
 *google-token*.json
 *service_account*.json
@@ -20,7 +21,7 @@ facefusion-presets.json
 *.log
 
 # =====================================================================
-# Bundled Windows binaries (distributed via GitHub Releases ZIPs, not Git)
+# Bundled Windows binaries (distributed via Releases / auto-bootstrap)
 # =====================================================================
 /runtime/
 /tools/
@@ -50,6 +51,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!app/.env.example
 .DS_Store
 Thumbs.db
 .vs/

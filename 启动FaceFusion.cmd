@@ -1,9 +1,8 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-facefusion-foreground.ps1"
-set "FACEFUSION_EXIT=%ERRORLEVEL%"
-echo.
-if not "%FACEFUSION_EXIT%"=="0" echo FaceFusion 启动失败，错误代码：%FACEFUSION_EXIT%
-echo 按任意键关闭窗口。
-pause >nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0app\scripts\start-facefusion-background.ps1"
+if errorlevel 1 (
+    echo.
+    echo 启动未完成，请根据上方提示检查网络或显卡驱动后重试。
+    pause
+)

@@ -1501,7 +1501,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         import importlib.util
 
         repo_root = Path(__file__).resolve().parents[3]
-        script_path = repo_root / 'create-portable-zip.py'
+        script_path = repo_root / 'app' / 'scripts' / 'create-portable-zip.py'
         spec = importlib.util.spec_from_file_location('create_portable_zip_mod', script_path)
         assert spec is not None and spec.loader is not None
         packager = importlib.util.module_from_spec(spec)
@@ -1538,7 +1538,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[3]
 
         # 1. Load auto_updater.py & verify semver, zip path-traversal guard, and SHA-256 atomic hot update
-        au_spec = importlib.util.spec_from_file_location('auto_updater_test_mod', repo_root / 'auto_updater.py')
+        au_spec = importlib.util.spec_from_file_location('auto_updater_test_mod', repo_root / 'app' / 'scripts' / 'auto_updater.py')
         assert au_spec is not None and au_spec.loader is not None
         au = importlib.util.module_from_spec(au_spec)
         au_spec.loader.exec_module(au)
@@ -1550,7 +1550,8 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
 
         sim_root = self.tmp_path / 'sim_install'
         (sim_root / 'userdata').mkdir(parents=True, exist_ok=True)
-        (sim_root / 'VERSION').write_text('1.1.0\n', encoding='utf-8')
+        (sim_root / 'app').mkdir(parents=True, exist_ok=True)
+        (sim_root / 'app' / 'VERSION').write_text('1.1.0\n', encoding='utf-8')
         precious_secret = sim_root / 'userdata' / 'facefusion-google-token.json'
         precious_secret.write_text('{"refresh_token":"keep-me"}', encoding='utf-8')
 
@@ -1565,7 +1566,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         # Valid signed 0.4 MB code hot-update (`1.1.0` -> `1.2.0`)
         good_zip = self.tmp_path / 'good_update.zip'
         with zipfile.ZipFile(good_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr('VERSION', '1.2.0\n')
+            zf.writestr('app/VERSION', '1.2.0\n')
             zf.writestr('app/facefusion/hot_patched.txt', 'hello-v1.2.0')
         good_bytes = good_zip.read_bytes()
         good_sha = hashlib.sha256(good_bytes).hexdigest()
@@ -1592,7 +1593,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
             self.assertIn('keep-me', precious_secret.read_text(encoding='utf-8'))
 
         # 2. Load env_bootstrap.py & verify wheel selector priority and SHA-256 resume downloader
-        eb_spec = importlib.util.spec_from_file_location('env_bootstrap_test_mod', repo_root / 'env_bootstrap.py')
+        eb_spec = importlib.util.spec_from_file_location('env_bootstrap_test_mod', repo_root / 'app' / 'scripts' / 'env_bootstrap.py')
         assert eb_spec is not None and eb_spec.loader is not None
         eb = importlib.util.module_from_spec(eb_spec)
         eb_spec.loader.exec_module(eb)
@@ -1693,7 +1694,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         self.assertNotIn(')[', safe_md)
 
         repo_root = Path(__file__).resolve().parents[3]
-        spec = importlib.util.spec_from_file_location('create_portable_zip_sec', repo_root / 'create-portable-zip.py')
+        spec = importlib.util.spec_from_file_location('create_portable_zip_sec', repo_root / 'app' / 'scripts' / 'create-portable-zip.py')
         assert spec is not None and spec.loader is not None
         packager = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(packager)

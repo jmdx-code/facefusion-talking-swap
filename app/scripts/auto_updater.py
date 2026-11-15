@@ -18,8 +18,8 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
-ROOT = Path(__file__).resolve().parent
-VERSION_FILE = ROOT / 'VERSION'
+# File lives at `<ROOT>/app/scripts/auto_updater.py` -> parents[2] is `<ROOT>`
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_GITHUB_REPO = 'jmdx-code/facefusion-talking-swap'
 UPDATE_ASSET_NAME = 'FaceFusion-Update-CodeOnly.zip'
 UPDATE_SHA_ASSET_NAME = 'FaceFusion-Update-CodeOnly.zip.sha256.txt'
@@ -42,11 +42,11 @@ class UpdateCheckResult:
 
 
 def read_local_version(root_dir: Path = ROOT) -> str:
-    vf = root_dir / 'VERSION'
-    if vf.is_file():
-        raw = vf.read_text(encoding='utf-8', errors='ignore').strip()
-        if raw:
-            return raw.lstrip('vV')
+    for candidate in (root_dir / 'app' / 'VERSION', root_dir / 'VERSION'):
+        if candidate.is_file():
+            raw = candidate.read_text(encoding='utf-8', errors='ignore').strip()
+            if raw:
+                return raw.lstrip('vV')
     return '1.0.0'
 
 
@@ -143,7 +143,7 @@ def validate_and_extract_update_zip(
         if actual != expected_sha256.lower():
             raise ValueError(f'更新包 SHA-256 校验不一致（期望 {expected_sha256[:12]}...，实际 {actual[:12]}...）')
 
-    forbidden_roots = {'userdata', 'runtime', 'tools', '.git'}
+    forbidden_roots = {'userdata', 'runtime', 'tools', '.git', '_维护者工具'}
     extracted_count = 0
 
     with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -249,8 +249,9 @@ def check_and_apply_update(
         os.replace(part_path, zip_path)
 
         file_cnt = validate_and_extract_update_zip(zip_path, target_root, expected_sha256=expected_sha)
-        # Ensure VERSION reflects remote_ver even if tag bumped without editing VERSION
-        (target_root / 'VERSION').write_text(f'{remote_ver}\n', encoding='utf-8')
+        ver_dest = target_root / 'app' / 'VERSION'
+        ver_dest.parent.mkdir(parents=True, exist_ok=True)
+        ver_dest.write_text(f'{remote_ver}\n', encoding='utf-8')
         try:
             zip_path.unlink()
         except OSError:

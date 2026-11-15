@@ -1,5 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
-$packageRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
+# File lives at `<ROOT>\app\scripts\stop-facefusion.ps1`
+$packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $portablePython = [System.IO.Path]::GetFullPath((Join-Path $packageRoot 'runtime\python\python.exe'))
 $portableToolsDir = [System.IO.Path]::GetFullPath((Join-Path $packageRoot 'tools\ffmpeg')) + [System.IO.Path]::DirectorySeparatorChar
 $pidFile = Join-Path $packageRoot 'userdata\logs\.facefusion.pid'
@@ -7,7 +8,6 @@ $legacyPidFile = Join-Path $packageRoot '.facefusion.pid'
 
 $stoppedAny = $false
 
-# 1. Stop Portable Python & Portable FFmpeg/FFprobe processes belonging exclusively to this folder (no WMI required)
 $ownPyProcs = Get-Process -Name 'python' -ErrorAction SilentlyContinue |
     Where-Object { $_.Path -and [string]::Equals([System.IO.Path]::GetFullPath($_.Path), $portablePython, [System.StringComparison]::OrdinalIgnoreCase) }
 
@@ -24,7 +24,6 @@ foreach ($mproc in $ownMediaProcs) {
     $stoppedAny = $true
 }
 
-# 2. Stop wrapper PID recorded in userdata\logs\.facefusion.pid if still alive
 foreach ($candidatePidFile in @($pidFile, $legacyPidFile)) {
     if (Test-Path -LiteralPath $candidatePidFile) {
         $savedText = Get-Content -LiteralPath $candidatePidFile -ErrorAction SilentlyContinue | Select-Object -First 1

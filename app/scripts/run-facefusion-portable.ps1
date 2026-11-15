@@ -5,11 +5,12 @@
 )
 
 $ErrorActionPreference = 'Stop'
-$packageRoot = [System.IO.Path]::GetFullPath($PSScriptRoot)
+# File lives at `<ROOT>\app\scripts\run-facefusion-portable.ps1`
+$packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $sourceDir = Join-Path $packageRoot 'app\facefusion'
 $python = Join-Path $packageRoot 'runtime\python\python.exe'
-$autoUpdater = Join-Path $packageRoot 'auto_updater.py'
-$envBootstrap = Join-Path $packageRoot 'env_bootstrap.py'
+$autoUpdater = Join-Path $PSScriptRoot 'auto_updater.py'
+$envBootstrap = Join-Path $PSScriptRoot 'env_bootstrap.py'
 
 if (-not (Test-Path -LiteralPath $python)) {
     throw "便携版 Python 核心不完整：$python"
@@ -20,7 +21,6 @@ if ((-not $nvcudaDll -or -not (Test-Path -LiteralPath $nvcudaDll)) -and (-not (G
     throw '没有检测到 NVIDIA 显卡驱动。请先安装或更新 NVIDIA 官方显卡驱动。'
 }
 
-# Isolate ALL local runtime data, auth tokens, presets, models, caches, temp files, and outputs inside userdata\
 $userDataDir = Join-Path $packageRoot 'userdata'
 $modelsDir = Join-Path $userDataDir 'models'
 $tempDir = Join-Path $userDataDir 'temp'
@@ -90,7 +90,6 @@ if ($isInteractiveRun -and (-not $SkipPreflight)) {
     }
 }
 
-# Resolve FFmpeg and NVIDIA CUDA/cuDNN DLL directories AFTER env_bootstrap has ensured they exist
 $ffmpegBin = Get-ChildItem (Join-Path $packageRoot 'tools\ffmpeg') -Directory -ErrorAction SilentlyContinue |
     Select-Object -First 1 |
     ForEach-Object { Join-Path $_.FullName 'bin' }

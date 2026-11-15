@@ -1,5 +1,5 @@
 """
-First-run runtime bootstrapper for the ~15 MB micro-portable distribution (Scheme C).
+First-run runtime bootstrapper for the ~12 MB micro-portable distribution (Scheme C).
 Pure Python 3.12 stdlib ONLY — runs inside minimal portable Python BEFORE any third-party package exists.
 
 Downloads & verifies strictly from official international endpoints:
@@ -25,14 +25,14 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-ROOT = Path(__file__).resolve().parent
+# File lives at `<ROOT>/app/scripts/env_bootstrap.py` -> parents[2] is `<ROOT>`
+ROOT = Path(__file__).resolve().parents[2]
 
 FFMPEG_URLS: Tuple[str, ...] = (
     'https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip',
     'https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip',
 )
 
-# Exact tested Windows x64 + Python 3.12 + CUDA 12.9 / cuDNN 9.26 runtime set
 RUNTIME_PACKAGES: Tuple[Tuple[str, str], ...] = (
     ('aiofiles', '24.1.0'),
     ('annotated-doc', '0.0.5'),
@@ -95,7 +95,6 @@ RUNTIME_PACKAGES: Tuple[Tuple[str, str], ...] = (
     ('tzdata', '2026.4'),
     ('uvicorn', '0.54.0'),
     ('websockets', '15.0.1'),
-    # Heavy GPU & CUDA 12 / cuDNN 9 libraries placed last for clear progress visibility
     ('onnxruntime-gpu', '1.24.4'),
     ('nvidia-cuda-runtime-cu12', '12.9.79'),
     ('nvidia-nvjitlink-cu12', '12.9.86'),
@@ -252,7 +251,6 @@ def find_missing_packages() -> List[Tuple[str, str]]:
 
 
 def select_best_wheel_from_pypi(urls_meta: List[Dict[str, Any]], py_nodot: str = '312') -> Optional[Tuple[str, str, str]]:
-    """Select compatible Windows x64 Python 3.12 wheel `(filename, url, sha256)` from PyPI release JSON."""
     cp_tag = f'cp{py_nodot}'
     candidates: List[Tuple[int, str, str, str]] = []
 
@@ -271,12 +269,10 @@ def select_best_wheel_from_pypi(urls_meta: List[Dict[str, Any]], py_nodot: str =
             continue
         py_tag, abi_tag, plat_tag = parts[-3], parts[-2], parts[-1]
 
-        # Platform check: only win_amd64 or any
         plat_parts = set(plat_tag.split('.'))
         if not ('win_amd64' in plat_parts or 'any' in plat_parts):
             continue
 
-        # Python + ABI compatibility check for CPython 3.12 on Windows x64
         py_parts = set(py_tag.split('.'))
         abi_parts = set(abi_tag.split('.'))
 
@@ -408,7 +404,6 @@ def ensure_python_packages(root_dir: Path = ROOT) -> bool:
 
         batch_wheels.append(whl_path)
         is_large_gpu_pkg = pkg_name.startswith(('nvidia-', 'onnxruntime'))
-        # Flush immediately on large GPU packages or every 12 small packages so progress is persisted
         if is_large_gpu_pkg or len(batch_wheels) >= 12 or idx == total:
             print(f'    正在解压安装组件批次（至 {pkg_name}）...', flush=True)
             if not _flush_install_batch(batch_wheels):
