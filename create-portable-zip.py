@@ -23,7 +23,27 @@ UPDATE_ARCHIVE_PATH = DIST_DIR / 'FaceFusion-Update-CodeOnly.zip'
 
 EXCLUDED_TOP_NAMES = {'userdata', '.git', '.github', '.vs', '.vscode', '.idea'}
 EXCLUDED_PART_NAMES = {'__pycache__', '.caches', '.pytest_cache', '.ruff_cache'}
-EXCLUDED_SUFFIXES = {'.pyc', '.pyo', '.onnx', '.part'}
+EXCLUDED_SUFFIXES = {'.pyc', '.pyo', '.onnx', '.part', '.map'}
+
+
+def _is_unused_runtime_dev_asset(rel_posix_lower: str) -> bool:
+    """Exclude non-runtime C/C++ headers, static link libs, unit-test fixtures, and SSR dev sources
+    so the portable archive stays cleanly below GitHub Releases' 2.00 GiB single-file limit."""
+    if not rel_posix_lower.startswith('runtime/'):
+        return False
+    if '/site-packages/onnx/backend/test/' in rel_posix_lower or '/site-packages/onnx/test/' in rel_posix_lower:
+        return True
+    if '/site-packages/gradio/_frontend_code/' in rel_posix_lower:
+        return True
+    if '/site-packages/gradio/templates/node/' in rel_posix_lower:
+        return True
+    if '/site-packages/nvidia/' in rel_posix_lower:
+        if '/include/' in rel_posix_lower or rel_posix_lower.endswith('.lib'):
+            return True
+    if '/site-packages/' in rel_posix_lower and '/tests/' in rel_posix_lower:
+        if any(pkg in rel_posix_lower for pkg in ('/scipy/', '/numpy/', '/pandas/', '/sympy/')):
+            return True
+    return False
 FORBIDDEN_PERSONAL_FILENAMES = {
     '.facefusion.pid',
     'facefusion.log',
@@ -67,6 +87,8 @@ def collect_shareable_files(*, include_runtime_and_tools: bool) -> list[Path]:
                 continue
             if 'doc' in [p.lower() for p in rel.parts]:
                 continue
+        if _is_unused_runtime_dev_asset(rel.as_posix().lower()):
+            continue
         if _is_secret_or_personal_file(path):
             raise RuntimeError(f'检测到根目录外存在个人配置或密钥文件，已中止打包：{rel}')
         result.append(path)
