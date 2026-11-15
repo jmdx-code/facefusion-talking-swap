@@ -1711,6 +1711,20 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         fake_yolo.write_bytes(b'tampered_onnx_weights')
         self.assertFalse(model_bootstrap.validate_model_sha256(str(fake_yolo)))
 
+        # 6. Windows .cmd/.ps1 cross-codepage safety: .cmd must be pure ASCII + CRLF without chcp; .ps1 must have UTF-8 BOM + CRLF
+        for cmd_path in repo_root.glob('*.cmd'):
+            raw = cmd_path.read_bytes()
+            self.assertFalse(raw.startswith(b'\xef\xbb\xbf'), f'{cmd_path.name} must not have UTF-8 BOM')
+            self.assertTrue(all(b < 128 for b in raw), f'{cmd_path.name} must be pure ASCII')
+            self.assertIn(b'\r\n', raw, f'{cmd_path.name} must use CRLF')
+            self.assertNotIn(b'\n', raw.replace(b'\r\n', b''), f'{cmd_path.name} must not contain bare LF')
+            self.assertNotIn(b'chcp', raw.lower(), f'{cmd_path.name} must not call chcp inside .cmd')
+
+        for ps1_path in (repo_root / 'app' / 'scripts').glob('*.ps1'):
+            raw = ps1_path.read_bytes()
+            self.assertTrue(raw.startswith(b'\xef\xbb\xbf'), f'{ps1_path.name} must start with UTF-8 BOM for PowerShell 5.1')
+            self.assertIn(b'\r\n', raw, f'{ps1_path.name} must use CRLF')
+
 
 if __name__ == '__main__':
     unittest.main()

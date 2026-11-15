@@ -1,4 +1,5 @@
 ﻿$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 # File lives at `<ROOT>\app\scripts\stop-facefusion.ps1`
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $portablePython = [System.IO.Path]::GetFullPath((Join-Path $packageRoot 'runtime\python\python.exe'))

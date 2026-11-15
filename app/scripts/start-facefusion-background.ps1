@@ -1,4 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {
 # File lives at `<ROOT>\app\scripts\start-facefusion-background.ps1`
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $portablePython = [System.IO.Path]::GetFullPath((Join-Path $packageRoot 'runtime\python\python.exe'))
@@ -126,3 +128,10 @@ for ($attempt = 0; $attempt -lt 300; $attempt++) {
 }
 
 throw "FaceFusion 未在 300 秒内启动，请查看：$errorLog"
+}
+catch {
+    Write-Host ''
+    Write-Host "[启动未完成] $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host '请根据上方提示检查网络连接或 NVIDIA 显卡驱动后重试。' -ForegroundColor Yellow
+    exit 1
+}

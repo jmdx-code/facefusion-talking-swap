@@ -145,7 +145,21 @@ def build_zip_archive(
         for idx, file_path in enumerate(files, start=1):
             rel_posix = file_path.relative_to(ROOT).as_posix()
             arc_name = f'{arc_prefix}/{rel_posix}' if arc_prefix else rel_posix
-            zf.write(file_path, arc_name)
+            suffix_low = file_path.suffix.lower()
+            if suffix_low in ('.cmd', '.bat'):
+                raw_text = file_path.read_bytes().decode('utf-8-sig')
+                try:
+                    raw_text.encode('ascii')
+                except UnicodeEncodeError as exc:
+                    raise RuntimeError(f'.cmd/.bat 启动脚本必须为纯 ASCII 以兼容所有 Windows 代码页：{rel_posix}') from exc
+                norm_bytes = raw_text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n').encode('ascii')
+                zf.writestr(arc_name, norm_bytes)
+            elif suffix_low == '.ps1':
+                raw_text = file_path.read_bytes().decode('utf-8-sig')
+                norm_text = raw_text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\r\n')
+                zf.writestr(arc_name, b'\xef\xbb\xbf' + norm_text.encode('utf-8'))
+            else:
+                zf.write(file_path, arc_name)
             written_bytes += file_path.stat().st_size
             if idx % 500 == 0 or idx == len(files) or time.monotonic() - last_print >= 8:
                 pct = (written_bytes / total_bytes * 100.0) if total_bytes else 100.0

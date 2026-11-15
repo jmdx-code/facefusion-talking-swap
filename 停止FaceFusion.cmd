@@ -1,3 +1,2 @@
 @echo off
-chcp 65001 >nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0app\scripts\stop-facefusion.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0app\scripts\stop-facefusion.ps1"
