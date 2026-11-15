@@ -1,0 +1,49 @@
+# =====================================================================
+# Personal data, OAuth credentials, downloaded models, logs & builds
+# =====================================================================
+/userdata/
+**/userdata/
+*client_secret*.json
+*google-token*.json
+facefusion-google-token.json
+facefusion-google-client-secret.json
+facefusion-sheet-worker.json
+facefusion-presets.json
+.facefusion.pid
+*.log
+
+# =====================================================================
+# Bundled Windows binaries (distributed via GitHub Releases ZIPs, not Git)
+# =====================================================================
+/runtime/
+/tools/
+
+# =====================================================================
+# AI Model Weights (auto-downloaded on first run from official CDNs)
+# Keep pinned 8-byte CRC32 .hash verification files tracked in Git!
+# =====================================================================
+*.onnx
+*.part
+!app/facefusion/.assets/models/*.hash
+
+# =====================================================================
+# Python bytecode, caches, build artifacts & OS metadata
+# =====================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+.caches/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.zip
+*.7z
+*.rar
+*.tmp
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.vs/
+.vscode/
+.idea/

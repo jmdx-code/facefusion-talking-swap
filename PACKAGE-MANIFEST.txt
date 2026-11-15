@@ -1,0 +1,8 @@
+Package: FaceFusion-Portable-Windows-NVIDIA
+FaceFusion: 3.9.0
+Python: 3.12 (self-contained runtime)
+Platform: Windows x64 / NVIDIA CUDA 12 + cuDNN 9
+Presets: 没问题选这个 / 解决嘴巴张不开 / 解决眼睛斜
+Bundled Environment: Python runtime, CUDA/cuDNN libraries, FFmpeg/FFprobe, and licenses included
+AI Model Weights (.onnx): Auto-downloaded on first launch from official HuggingFace / GitHub Releases into userdata\models\ (verified via pinned CRC32 .hash files)
+User State & Credentials: Isolated inside userdata\ (excluded from distribution archives and Git)
