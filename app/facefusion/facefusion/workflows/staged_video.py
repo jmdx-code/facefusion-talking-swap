@@ -35,20 +35,36 @@ def supported():
         and s('temp_pixel_format') == 'bgr24')
 
 
-def choose_workers(free_mib):
+WORKER_TIERS = (
+    dict(metadata=2, swap=1, restore=1, enhance=1, temple=2, tier='低'),
+    dict(metadata=4, swap=4, restore=2, enhance=2, temple=4, tier='中'),
+    dict(metadata=8, swap=8, restore=4, enhance=4, temple=8, tier='高'),
+    dict(metadata=8, swap=10, restore=5, enhance=5, temple=10, tier='高+'),
+)
+
+
+def choose_workers(free_mib, max_tier=None):
     # Modest 25% increase for cards with ample free VRAM (typically 12 GiB+).
     # Above the total VRAM of an 8 GiB card, so its measured tiers stay intact.
     # This tier still needs 12 GiB hardware benchmarking; metadata stays at 8
     # to avoid increasing CPU/decode contention alongside GPU concurrency.
     if free_mib >= 8500:
-        return dict(metadata=8, swap=10, restore=5, enhance=5, temple=10, tier='高+')
+        tier = 3
     # Cold measured baseline 2475 MiB, peak 6873 MiB: ~4.4 GiB incremental,
     # plus headroom. Budget the job's increment, not the whole system's peak.
-    if free_mib >= 5000:
-        return dict(metadata=8, swap=8, restore=4, enhance=4, temple=8, tier='高')
-    if free_mib >= 3600:
-        return dict(metadata=4, swap=4, restore=2, enhance=2, temple=4, tier='中')
-    return dict(metadata=2, swap=1, restore=1, enhance=1, temple=2, tier='低')
+    elif free_mib >= 5000:
+        tier = 2
+    elif free_mib >= 3600:
+        tier = 1
+    else:
+        tier = 0
+    if max_tier is not None:
+        tier = min(tier, max_tier)
+    return dict(WORKER_TIERS[tier])
+
+
+def worker_tier_index(workers):
+    return next(index for index, item in enumerate(WORKER_TIERS) if item['tier'] == workers['tier'])
 
 
 def available_vram():
@@ -114,6 +130,6 @@ def has_disk_budget(include_stage=False, include_source=True):
     return True
 
 
-def process_staged_frames():
+def process_staged_frames(max_tier=None):
     from facefusion.workflows.roi_video import process_roi_video
-    return process_roi_video()
+    return process_roi_video(max_tier=max_tier)

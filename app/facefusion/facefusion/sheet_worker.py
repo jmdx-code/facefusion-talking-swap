@@ -1752,6 +1752,8 @@ class SheetWorkerManager:
 
             joined_recent = '\n'.join(recent_lines)
             lower_recent = joined_recent.lower()
+            if 'gpu_memory_exhausted' in lower_recent:
+                raise ValueError('最低并发档仍显存不足，请释放其他程序的显存后重试。')
             if 'no source face detected' in lower_recent:
                 raise ValueError('源人脸图片中未检测到清晰正脸，请更换包含清晰正脸的源图片。')
             if 'content_analyser_blocked' in joined_recent or (
@@ -1828,6 +1830,9 @@ class SheetWorkerManager:
 
         recent_lines.append(cleaned)
         lower = cleaned.lower()
+        if ('gpu_memory_retry' in lower or 'gpu_memory_exhausted' in lower) and stage_state is not None:
+            stage_state['saw_processing'] = True
+            task.progress_detail = '显存不足，正在降低并发并重新处理...' if 'gpu_memory_retry' in lower else '最低并发档仍显存不足'
         if ('staged_encoder_failed' in lower or 'stream_encoder_failed' in lower) and stage_state is not None:
             stage_state['saw_merging'] = True
         if 'extracting frames' in lower or '提取帧' in cleaned:

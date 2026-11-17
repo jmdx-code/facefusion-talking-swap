@@ -18,14 +18,44 @@ def process_stream_fallback():
 
 def process_staged_or_fallback():
     from facefusion.roi_cache import CacheSpaceError
-    try:
-        return process_staged_frames()
-    except CacheSpaceError:
-        from facefusion import logger
-        logger.warn('FFV1缓存磁盘余量不足，已释放临时缓存，切换低并发流式处理。', __name__)
+    from facefusion.gpu_memory import GpuMemoryError, forget_exception_frames
+    from facefusion import logger, video_manager
+    from facefusion.workflows.staged_video import WORKER_TIERS, available_vram, choose_workers, release_pools, worker_tier_index
+    max_tier = None
+    while True:
+        try:
+            return process_staged_frames(max_tier=max_tier) if max_tier is not None else process_staged_frames()
+        except CacheSpaceError:
+            if process_manager.is_stopping() or process_manager.is_pending():
+                return 4
+            logger.warn('FFV1缓存磁盘余量不足，已释放临时缓存，切换低并发流式处理。', __name__)
+            clear()
+            setup()
+            return process_stream_fallback()
+        except GpuMemoryError as error:
+            failed_workers = error.workers
+            detail = ' '.join(str(error).split())[:2000]
+            # Unwind worker tracebacks before collecting released ORT sessions.
+            forget_exception_frames(error)
+        if process_manager.is_stopping() or process_manager.is_pending():
+            return 4
+        video_manager.clear_video_pool()
+        release_pools()
+        if process_manager.is_stopping() or process_manager.is_pending():
+            return 4
+        if failed_workers is None:
+            failed_workers = choose_workers(available_vram(), max_tier=max_tier)
+        next_tier = worker_tier_index(failed_workers) - 1
+        if next_tier < 0:
+            logger.error('gpu_memory_exhausted: 最低并发档仍显存不足，请释放其他程序的显存后重试。' + detail, __name__)
+            return 1
+        max_tier = next_tier
+        logger.warn('gpu_memory_retry: %s档显存不足，已释放模型与临时缓存，降为%s档从头重试；画质参数不变。' % (
+            failed_workers['tier'], WORKER_TIERS[max_tier]['tier']), __name__)
         clear()
+        if process_manager.is_stopping() or process_manager.is_pending():
+            return 4
         setup()
-        return process_stream_fallback()
 
 
 def process(start_time : float) -> ErrorCode:

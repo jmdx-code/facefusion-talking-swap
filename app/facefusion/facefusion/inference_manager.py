@@ -92,7 +92,12 @@ def create_inference_session(model_path : str, inference_providers : List[Infere
 		logger.debug(translator.get('loading_model_succeeded').format(model_name = model_file_name, seconds = calculate_end_time(start_time)), __name__)
 		return inference_session
 
-	except Exception:
+	except Exception as error:
+		from facefusion.gpu_memory import is_gpu_memory_error
+		if is_gpu_memory_error(error, inference_providers):
+			# Let the video dispatcher release sessions and retry at a lower tier.
+			# os._exit would bypass both recovery and temporary-file cleanup.
+			raise
 		logger.error(translator.get('loading_model_failed').format(model_name = model_file_name), __name__)
 		fatal_exit(1)
 

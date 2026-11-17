@@ -20,6 +20,7 @@ from facefusion.face_creator import get_many_faces, get_one_face
 from facefusion.face_helper import calculate_paste_area, warp_face_by_face_landmark_5
 from facefusion.face_selector import sort_faces_by_order
 from facefusion.filesystem import filter_image_paths
+from facefusion.gpu_memory import GpuMemoryError, is_gpu_memory_error
 from facefusion.processors.modules.face_swapper import core as swapper
 from facefusion.processors.modules.expression_restorer import core as restorer
 from facefusion.processors.modules.face_enhancer import core as enhancer
@@ -106,7 +107,7 @@ def _progress(items, total, label):
                 disable=state_manager.get_item('log_level') in ['warn', 'error'])
 
 
-def process_roi_video():
+def process_roi_video(max_tier=None):
     target = state_manager.get_item('target_path')
     root = Path(get_temp_directory_path(target)).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -114,9 +115,14 @@ def process_roi_video():
     stats = CacheStats()
     old_cv_threads = cv2.getNumThreads()
     writer = None
+    workers = None
     try:
         cv2.setNumThreads(1)
         check_cancelled()
+        # A failed attempt may already have swapped frames. Count only the
+        # successful attempt, including when the same task is restarted.
+        with swapper._SWAPPED_FRAME_LOCK:
+            swapper._SWAPPED_FRAME_COUNT = 0
         video_manager.clear_video_pool()
         sources = read_static_images(filter_image_paths(state_manager.get_item('source_paths')))
         release_pools()
@@ -125,7 +131,7 @@ def process_roi_video():
             raise ValueError('源图片未检测到人脸')
         release_pools()
         free_mib = available_vram()
-        workers = choose_workers(free_mib)
+        workers = choose_workers(free_mib, max_tier=max_tier)
         logger.info('默认人脸区域FFV1无损流程：30秒分文件，空闲显存%s MiB，%s档；换脸%s / 表情%s / 增强%s / 太阳穴%s' % (
             free_mib, workers['tier'], workers['swap'], workers['restore'], workers['enhance'], workers['temple']), __name__)
         output_size = output_resolution(target)
@@ -289,6 +295,8 @@ def process_roi_video():
     except Exception as error:
         if process_manager.is_stopping() or process_manager.is_pending():
             return 4
+        if is_gpu_memory_error(error, state_manager.get_item('execution_providers')):
+            raise GpuMemoryError(str(error), workers) from error
         logger.error('人脸区域FFV1处理失败：' + str(error), __name__)
         return 1
     finally:
