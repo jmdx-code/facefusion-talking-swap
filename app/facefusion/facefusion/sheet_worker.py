@@ -69,7 +69,7 @@ SWAPPED_TOTAL_RE = re.compile(r'swapped_frames_total=(\d+)')
 
 AUTO_CLAIM_INTERVAL_MINUTES = 20
 AUTO_CLAIM_INTERVAL_SEC = AUTO_CLAIM_INTERVAL_MINUTES * 60  # 20 minutes
-AUTO_MAX_ACTIVE_TASKS = 2          # Max 1 in production + 1 queued backlog for auto-claim
+AUTO_MAX_ACTIVE_TASKS = 1          # Claim only when idle; never reserve a spare auto task.
 
 # Rich local statuses (NOT spammed to Google Sheets; Sheets only gets 已领取制作中 -> 已完成/制作失败)
 LOCAL_STATUS_QUEUED = '排队等待中'
@@ -382,7 +382,7 @@ class SheetWorkerManager:
         self.queued_tasks: Deque[LocalTask] = collections.deque()
         self.history_tasks: Deque[LocalTask] = collections.deque(maxlen=50)
 
-        # Auto-claim state (20-min interval, cap at 2 active: 1 running + 1 queued)
+        # Auto-claim one task at a time; poll every 20 min only while empty.
         self.auto_claim_enabled: bool = False
         self.next_auto_poll_ts: float = 0.0
         self._auto_claim_busy: bool = False
@@ -1026,23 +1026,25 @@ class SheetWorkerManager:
                 self.set_banner(msg)
                 return msg
             # Trigger immediate first check in background scheduler without blocking UI
-            self.next_auto_poll_ts = time.time()
-        msg = f'已开启自动接单模式：每间隔 {AUTO_CLAIM_INTERVAL_MINUTES} 分钟巡检一次表格，本机活跃上限 2 条（1 制作中 + 1 排队中），饱和时不领新单。'
+            self.next_auto_poll_ts = 0.0 if self.active_task_count() else time.time()
+        msg = f'已开启自动接单模式：每次只领取 1 条，完成后立即领取下一条；没有可领任务时每 {AUTO_CLAIM_INTERVAL_MINUTES} 分钟巡检一次。'
         self.set_banner(msg)
         return msg
 
-    def trigger_auto_claim_once(self) -> str:
-        """Run one saturation-aware auto-claim check right now."""
+    def trigger_auto_claim_once(self, *, automatic: bool = False) -> str:
+        """Claim one task only while idle. `automatic` guards stale timer calls."""
         with self._lock:
+            if automatic and (not self.auto_claim_enabled or self._stop_threads):
+                return '自动接单已关闭，跳过巡检。'
             if self._auto_claim_busy:
                 return '自动接单巡检正在进行中，请稍候...'
             self._auto_claim_busy = True
-            if self.auto_claim_enabled:
-                self.next_auto_poll_ts = time.time() + AUTO_CLAIM_INTERVAL_SEC
+            self.next_auto_poll_ts = 0.0
             active = self.active_task_count()
             worker_name = self.config.worker_name.strip()
             has_sheet = bool(self.config.spreadsheet_url)
 
+        added = []
         try:
             if not worker_name:
                 msg = '自动接单跳过：尚未填写自定义的“本机节点名称”，请先在上方配置区设置并保存。'
@@ -1054,7 +1056,7 @@ class SheetWorkerManager:
                 return msg
 
             if active >= AUTO_MAX_ACTIVE_TASKS:
-                msg = f'自动接单巡检：当前本机已有 {active} 条未完成任务（已达上限：1制作中+1排队），饱和跳过，不读取新任务。'
+                msg = f'自动接单巡检：当前本机已有 {active} 条未完成任务，饱和跳过；完成后再领下一条，不预领排队任务。'
                 self.log(msg)
                 return msg
 
@@ -1074,7 +1076,7 @@ class SheetWorkerManager:
                 ids = '、'.join(t.task_id for t in added)
                 msg = f'自动接单成功领取 {len(added)} 条新任务（{ids}），当前本机活跃任务 {self.active_task_count()}/{AUTO_MAX_ACTIVE_TASKS}。'
             else:
-                msg = '自动接单巡检完成：当前表格暂无可领取的新需求。'
+                msg = f'自动接单巡检完成：当前表格暂无可领取的新需求，{AUTO_CLAIM_INTERVAL_MINUTES} 分钟后再检查。'
             if conflicts:
                 msg += '（自动避让已领行：' + '；'.join(conflicts) + '）'
             self.set_banner(msg)
@@ -1089,17 +1091,29 @@ class SheetWorkerManager:
         finally:
             with self._lock:
                 self._auto_claim_busy = False
+                if not self.auto_claim_enabled or self._stop_threads:
+                    self.next_auto_poll_ts = 0.0
+                elif self.active_task_count():
+                    # Completion, including upload and sheet writeback, wakes
+                    # the scheduler. Do not poll or prefetch while it runs.
+                    self.next_auto_poll_ts = 0.0
+                elif added:
+                    # A short task can finish before this HTTP poll returns.
+                    # Preserve its immediate follow-up rather than losing it.
+                    self.next_auto_poll_ts = self.next_auto_poll_ts or time.time()
+                else:
+                    self.next_auto_poll_ts = time.time() + AUTO_CLAIM_INTERVAL_SEC
 
     def _auto_claim_loop(self) -> None:
         while not self._stop_threads:
             time.sleep(1.0)
             should_poll = False
             with self._lock:
-                if self.auto_claim_enabled and self.next_auto_poll_ts > 0 and time.time() >= self.next_auto_poll_ts:
-                    self.next_auto_poll_ts = time.time() + AUTO_CLAIM_INTERVAL_SEC
+                if self.auto_claim_enabled and not self._auto_claim_busy and self.next_auto_poll_ts > 0 and time.time() >= self.next_auto_poll_ts:
+                    self.next_auto_poll_ts = 0.0
                     should_poll = True
             if should_poll:
-                self.trigger_auto_claim_once()
+                self.trigger_auto_claim_once(automatic=True)
 
     def abort_current_task(self, return_to_sheet: bool = True) -> str:
         with self._lock:
@@ -1235,6 +1249,11 @@ class SheetWorkerManager:
         msg = f'已将 {released_count} 条{scope_text}排队任务退回表格（清空任务编号并恢复待领）。'
         if errors:
             msg += ' 部分回写异常：' + '；'.join(errors)
+        with self._lock:
+            if self.auto_claim_enabled and not self._stop_threads and not self.active_task_count():
+                # Returning the last queued task is another way to become
+                # idle; do not leave the scheduler parked indefinitely.
+                self.next_auto_poll_ts = time.time() + AUTO_CLAIM_INTERVAL_SEC
         self.set_banner(msg)
         return msg
 
@@ -1257,12 +1276,24 @@ class SheetWorkerManager:
                 continue
 
             self._run_single_task(task)
-            with self._lock:
-                self.current_task = None
-                self._current_proc = None
-                self.history_tasks.appendleft(task)
-                self.ui_state_version += 1
+            self._finish_local_task(task)
             self.sweep_runtime_temp_dirs()
+
+    def _finish_local_task(self, task: LocalTask) -> None:
+        """Schedule the next single claim only after the entire task finishes."""
+        with self._lock:
+            self.current_task = None
+            self._current_proc = None
+            self.history_tasks.appendleft(task)
+            self.ui_state_version += 1
+            if not self.auto_claim_enabled or self._stop_threads or self.queued_tasks:
+                self.next_auto_poll_ts = 0.0
+            elif task.abort_requested:
+                # A returned task may be the first claimable row again. Do not
+                # immediately reclaim what the user has just cancelled.
+                self.next_auto_poll_ts = time.time() + AUTO_CLAIM_INTERVAL_SEC
+            else:
+                self.next_auto_poll_ts = time.time()
 
     @staticmethod
     def _acquire_gpu_for_task(task: LocalTask) -> None:

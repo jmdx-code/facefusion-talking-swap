@@ -254,26 +254,26 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
         orig_claim_specific = GoogleSheetsCoordinator.claim_specific_tasks
         GoogleSheetsCoordinator.claim_specific_tasks = lambda self_c, t, worker_name, verify_delay_sec=0.0, allow_retry_failed=False: orig_claim_specific(self_c, t, worker_name, verify_delay_sec=0.0, allow_retry_failed=allow_retry_failed)  # type: ignore[assignment]
         try:
-            # 1. Idle (0 active) -> auto-claim must take AT MOST 2 tasks (1 running + 1 backlog)
+            # 1. Idle (0 active) -> claim one task without a spare backlog.
             mgr.trigger_auto_claim_once()
-            self.assertEqual(mgr.active_task_count(), 2)
+            self.assertEqual(mgr.active_task_count(), 1)
 
-            # 2. Saturated (2 active) -> auto-claim must skip without claiming a 3rd task
+            # 2. One active task -> no automatic prefetch of the next task.
             writes_before = sim.write_calls
             msg = mgr.trigger_auto_claim_once()
             self.assertIn('饱和跳过', msg)
-            self.assertEqual(mgr.active_task_count(), 2)
+            self.assertEqual(mgr.active_task_count(), 1)
             self.assertEqual(sim.write_calls, writes_before)  # Zero wasted API writes!
 
-            # 3. Manual selection has NO saturation limit: claim remaining 3 tasks manually
+            # 3. Explicit manual selection still allows a batch of four.
             mgr.refresh_sheet_tasks()
             remaining_tokens = [
                 json.dumps({'row': r.row_number, 'src': r.source_url, 'tgt': r.target_url})
                 for r in mgr.cached_sheet_rows if r.is_claimable
             ]
-            self.assertEqual(len(remaining_tokens), 3)
+            self.assertEqual(len(remaining_tokens), 4)
             added_cnt, conflicts = mgr.claim_manual_selection(remaining_tokens)
-            self.assertEqual(added_cnt, 3)
+            self.assertEqual(added_cnt, 4)
             self.assertEqual(conflicts, [])
             self.assertEqual(mgr.active_task_count(), 5)
 

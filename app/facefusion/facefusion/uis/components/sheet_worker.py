@@ -370,13 +370,15 @@ def _build_dashboard_html() -> str:
         auto_val = '已开启'
         auto_cls = 'ff-kpi-value accent'
         if active_total >= AUTO_MAX_ACTIVE_TASKS:
-            auto_sub = f'已满载暂停领新单 · {mins}分{secs:02d}秒后巡检'
+            auto_sub = '当前任务完整完成后，立即检查并领取下一条'
+        elif next_ts == 0 or remain == 0:
+            auto_sub = '正在检查可领取任务...'
         else:
-            auto_sub = f'下次巡检：{mins}分{secs:02d}秒后（每{AUTO_CLAIM_INTERVAL_MINUTES}分钟）'
+            auto_sub = f'空闲等待 · {mins}分{secs:02d}秒后再检查'
     else:
         auto_val = '未开启'
         auto_cls = 'ff-kpi-value'
-        auto_sub = f'开启后每 {AUTO_CLAIM_INTERVAL_MINUTES} 分钟自动补单'
+        auto_sub = f'一次1条，完成即续领；无任务时每{AUTO_CLAIM_INTERVAL_MINUTES}分钟检查'
 
     claim_cls = 'ff-kpi-value accent' if claimable_cnt > 0 else 'ff-kpi-value'
 
@@ -634,7 +636,7 @@ def render() -> None:
                 with gradio.Row():
                     REFRESH_BUTTON = gradio.Button('🔄 刷新需求', size='sm', scale=1, min_width=92)
                     AUTO_CLAIM_CHECKBOX = gradio.Checkbox(
-                        label=f'⚡ 自动接单（每 {AUTO_CLAIM_INTERVAL_MINUTES} 分钟巡检，上限 1 制作 + 1 排队）',
+                        label=f'⚡ 自动接单（一次1条，完成即续领；无任务时每{AUTO_CLAIM_INTERVAL_MINUTES}分钟检查）',
                         value=WORKER_MANAGER.auto_claim_enabled,
                         scale=3,
                         min_width=180
