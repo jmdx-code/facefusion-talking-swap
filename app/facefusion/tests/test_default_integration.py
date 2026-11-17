@@ -105,6 +105,18 @@ class DefaultIntegrationTest(unittest.TestCase):
         with patch.object(staged_video,'check_running'):
             self.assertEqual(list(staged_video.bounded_map(lambda n:n*n,range(50),4,'test')), [n*n for n in range(50)])
 
+    def test_high_plus_requires_more_free_vram_than_an_eight_gib_card(self):
+        for free in [5000,6200,6800,8192,8499]:
+            with self.subTest(free_mib=free):
+                self.assertEqual(staged_video.choose_workers(free),dict(metadata=8,swap=8,restore=4,enhance=4,temple=8,tier='高'))
+        for free in [8500,9500,12288,24000]:
+            with self.subTest(free_mib=free):
+                self.assertEqual(staged_video.choose_workers(free),dict(metadata=8,swap=10,restore=5,enhance=5,temple=10,tier='高+'))
+        self.assertEqual(staged_video.choose_workers(4999)['tier'],'中')
+        self.assertEqual(staged_video.choose_workers(3600)['tier'],'中')
+        self.assertEqual(staged_video.choose_workers(3599)['tier'],'低')
+        self.assertEqual(staged_video.choose_workers(0)['tier'],'低')
+
 
 class TempleIsolationTest(unittest.TestCase):
     def test_repair_matches_roi_and_leaves_mouth_and_outside_unchanged(self):

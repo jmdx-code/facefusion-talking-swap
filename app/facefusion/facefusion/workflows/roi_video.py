@@ -124,9 +124,10 @@ def process_roi_video():
         if source_face is None:
             raise ValueError('源图片未检测到人脸')
         release_pools()
-        workers = choose_workers(available_vram())
-        logger.info('默认人脸区域FFV1无损流程：30秒分文件，%s档；换脸%s / 表情%s / 增强%s / 太阳穴%s' % (
-            workers['tier'], workers['swap'], workers['restore'], workers['enhance'], workers['temple']), __name__)
+        free_mib = available_vram()
+        workers = choose_workers(free_mib)
+        logger.info('默认人脸区域FFV1无损流程：30秒分文件，空闲显存%s MiB，%s档；换脸%s / 表情%s / 增强%s / 太阳穴%s' % (
+            free_mib, workers['tier'], workers['swap'], workers['restore'], workers['enhance'], workers['temple']), __name__)
         output_size = output_resolution(target)
         size = processing_resolution(target, output_size)
         fps = restrict_video_fps(target, state_manager.get_item('output_video_fps'))

@@ -36,6 +36,12 @@ def supported():
 
 
 def choose_workers(free_mib):
+    # Modest 25% increase for cards with ample free VRAM (typically 12 GiB+).
+    # Above the total VRAM of an 8 GiB card, so its measured tiers stay intact.
+    # This tier still needs 12 GiB hardware benchmarking; metadata stays at 8
+    # to avoid increasing CPU/decode contention alongside GPU concurrency.
+    if free_mib >= 8500:
+        return dict(metadata=8, swap=10, restore=5, enhance=5, temple=10, tier='高+')
     # Cold measured baseline 2475 MiB, peak 6873 MiB: ~4.4 GiB incremental,
     # plus headroom. Budget the job's increment, not the whole system's peak.
     if free_mib >= 5000:

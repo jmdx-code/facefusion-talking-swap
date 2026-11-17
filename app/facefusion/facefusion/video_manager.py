@@ -147,7 +147,14 @@ def write_video_frame(video_writer : VideoWriter, vision_frame : VisionFrame) ->
 
 
 def close_video_writer(video_writer : VideoWriter) -> bool:
-	video_writer.get('process').stdin.close()
+	try:
+		video_writer.get('process').stdin.close()
+	except OSError:
+		# Buffered stdin can fail only when its final bytes are flushed. Keep
+		# the same signal as write_video_frame so sheet jobs can retry libx264.
+		from facefusion import logger
+		logger.error('stream_encoder_failed: 关闭视频编码管道失败', __name__)
+		raise
 	video_writer.get('process').wait()
 
 	if video_writer.get('process').returncode != 0:
