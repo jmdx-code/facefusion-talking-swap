@@ -13,7 +13,7 @@ from facefusion.types import BoundingBox, Face, FaceLandmark5, FaceLandmarkSet, 
 from facefusion.vision import is_vision_frame
 
 
-def create_faces(vision_frame : VisionFrame, bounding_boxes : List[BoundingBox], face_scores : List[Score], face_landmarks_5 : List[FaceLandmark5]) -> List[Face]:
+def create_faces(vision_frame : VisionFrame, bounding_boxes : List[BoundingBox], face_scores : List[Score], face_landmarks_5 : List[FaceLandmark5], geometry_only : bool = False) -> List[Face]:
 	faces = []
 	nms_threshold = get_nms_threshold(state_manager.get_item('face_detector_model'), state_manager.get_item('face_detector_angles'))
 	keep_indices = apply_nms(bounding_boxes, face_scores, state_manager.get_item('face_detector_score'), nms_threshold)
@@ -45,8 +45,15 @@ def create_faces(vision_frame : VisionFrame, bounding_boxes : List[BoundingBox],
 			'detector': face_score,
 			'landmarker': face_landmark_score_68
 		}
-		face_embedding, face_embedding_norm = calculate_face_embedding(vision_frame, face_landmark_set.get('5/68'))
-		gender, age, race = classify_face(vision_frame, face_landmark_set.get('5/68'))
+		if geometry_only:
+			# Only for the guarded neutral-weight pipeline: no identity matching or filters.
+			face_embedding = numpy.zeros(512, dtype=numpy.float32)
+			face_embedding[0] = 1
+			face_embedding_norm = face_embedding.copy()
+			gender, age, race = None, range(0), None
+		else:
+			face_embedding, face_embedding_norm = calculate_face_embedding(vision_frame, face_landmark_set.get('5/68'))
+			gender, age, race = classify_face(vision_frame, face_landmark_set.get('5/68'))
 
 		faces.append(Face(
 			origin = 'detect',
@@ -70,7 +77,7 @@ def get_one_face(faces : List[Face], position : int = 0) -> Optional[Face]:
 	return None
 
 
-def get_many_faces(vision_frames : List[VisionFrame]) -> List[Face]:
+def get_many_faces(vision_frames : List[VisionFrame], geometry_only : bool = False) -> List[Face]:
 	many_faces : List[Face] = []
 
 	for vision_frame in vision_frames:
@@ -89,7 +96,7 @@ def get_many_faces(vision_frames : List[VisionFrame]) -> List[Face]:
 				all_face_landmarks_5.extend(face_landmarks_5)
 
 			if all_bounding_boxes and all_face_scores and all_face_landmarks_5 and state_manager.get_item('face_detector_score') > 0:
-				faces = create_faces(vision_frame, all_bounding_boxes, all_face_scores, all_face_landmarks_5)
+				faces = create_faces(vision_frame, all_bounding_boxes, all_face_scores, all_face_landmarks_5, geometry_only)
 
 				if faces:
 					many_faces.extend(faces)

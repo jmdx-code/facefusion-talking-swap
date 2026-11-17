@@ -7,7 +7,7 @@ from facefusion import presets, state_manager
 from facefusion.processors.core import load_processor_module
 from facefusion.processors.modules.face_swapper import choices as swapper_choices
 from facefusion.uis.components import face_masker, face_swapper_options, preview, processors
-from facefusion.uis.core import get_ui_component
+from facefusion.uis.core import get_ui_component, register_ui_component
 
 PRESET_DROPDOWN: Optional[gradio.Dropdown] = None
 QUICK_CLEAR_BUTTON: Optional[gradio.Button] = None
@@ -19,6 +19,7 @@ NAME_TEXTBOX: Optional[gradio.Textbox] = None
 INFO_TEXTBOX: Optional[gradio.HTML] = None
 
 FIELDS = [
+    ('temple_correction', 'temple_correction_dropdown'),
     ('processors', 'processors_checkbox_group'),
     ('face_swapper_model', 'face_swapper_model_dropdown'),
     ('face_swapper_pixel_boost', 'face_swapper_pixel_boost_dropdown'),
@@ -49,7 +50,7 @@ def _detect_initial_preset() -> Optional[str]:
                 return key
     except Exception:
         pass
-    return 'clear'
+    return presets.DEFAULT_PRESET
 
 
 def _format_info_html(title: str, desc: str) -> str:
@@ -65,7 +66,7 @@ def render() -> None:
     global APPLY_BUTTON, SAVE_BUTTON, NAME_TEXTBOX, INFO_TEXTBOX
 
     init_key = _detect_initial_preset()
-    default_item = presets.BUILTINS.get(init_key or 'clear', presets.BUILTINS['clear'])
+    default_item = presets.BUILTINS.get(init_key or presets.DEFAULT_PRESET, presets.BUILTINS[presets.DEFAULT_PRESET])
     info_html = _format_info_html(default_item['label'], default_item['description'])
     try:
         choices = presets.list_choices()
@@ -73,10 +74,14 @@ def render() -> None:
         choices = [(item['label'], key) for key, item in presets.BUILTINS.items()]
         info_html = _format_info_html('预设读取提示', str(error))
 
+    from facefusion.video_options import save_upscale_preference
+    upscale = gradio.Checkbox(label='低分辨率视频提升至1080p（手动与自动接单共用）', value=state_manager.get_item('upscale_1080p') is not False, info='等比放大，保持竖屏；1080p及以上不缩小。关闭后按原分辨率处理。')
+    upscale.input(save_upscale_preference, inputs=upscale)
+
     with gradio.Row(elem_classes=['ff-preset-row']):
         QUICK_CLEAR_BUTTON = gradio.Button(
             '✨ 没问题选这个',
-            variant='primary' if init_key == 'clear' else 'secondary',
+            variant='primary' if init_key == presets.DEFAULT_PRESET else 'secondary',
             size='sm',
             min_width=88
         )
@@ -96,6 +101,9 @@ def render() -> None:
     INFO_TEXTBOX = gradio.HTML(value=info_html, padding=False)
 
     with gradio.Accordion('更多预设 / 保存自定义预设', open=False):
+        temple_option = gradio.Dropdown(label='太阳穴局部修正（增强后执行）', choices=[('开启', 'on'), ('关闭', 'off')], value=state_manager.get_item('temple_correction') or 'off')
+        register_ui_component('temple_correction_dropdown', temple_option)
+        temple_option.change(lambda value: state_manager.set_item('temple_correction', value), inputs=temple_option)
         with gradio.Row():
             PRESET_DROPDOWN = gradio.Dropdown(
                 label='全部预设列表（含自定义预设，选择即生效）',
@@ -119,7 +127,7 @@ def render() -> None:
 
 def _button_variants(active_key: Optional[str]):
     return (
-        gradio.Button(variant='primary' if active_key == 'clear' else 'secondary'),
+        gradio.Button(variant='primary' if active_key == presets.DEFAULT_PRESET else 'secondary'),
         gradio.Button(variant='primary' if active_key == 'mouth_restore' else 'secondary'),
         gradio.Button(variant='primary' if active_key == 'eye_restore' else 'secondary'),
     )
@@ -149,7 +157,7 @@ def listen() -> None:
         dep.success(preview.clear_and_update_preview_image, inputs=preview_inputs, outputs=preview_out, show_progress='minimal')
 
     for btn, preset_key in [
-        (QUICK_CLEAR_BUTTON, 'clear'),
+        (QUICK_CLEAR_BUTTON, presets.DEFAULT_PRESET),
         (QUICK_MOUTH_BUTTON, 'mouth_restore'),
         (QUICK_EYE_BUTTON, 'eye_restore')
     ]:

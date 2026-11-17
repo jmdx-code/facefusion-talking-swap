@@ -275,6 +275,9 @@ def process_frame(inputs : ExpressionRestorerInputs) -> ProcessorOutputs:
 	if target_faces:
 		for target_face in target_faces:
 			target_face = scale_face(target_face, target_vision_frame, temp_vision_frame)
-			temp_vision_frame = restore_expression(target_face, target_vision_frame, temp_vision_frame)
+			restore_target_frame = target_vision_frame
+			if target_vision_frame.shape[:2] != temp_vision_frame.shape[:2]:
+				restore_target_frame = cv2.resize(target_vision_frame, temp_vision_frame.shape[1::-1])
+			temp_vision_frame = restore_expression(target_face, restore_target_frame, temp_vision_frame)
 
 	return temp_vision_frame, temp_vision_mask

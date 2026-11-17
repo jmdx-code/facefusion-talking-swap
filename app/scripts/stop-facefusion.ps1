@@ -40,6 +40,20 @@ foreach ($candidatePidFile in @($pidFile, $legacyPidFile)) {
     }
 }
 
+# Forced process termination cannot run Python finally blocks. Reclaim only
+# owned, dead temporary workspaces after their processes have actually exited.
+foreach ($proc in $ownPyProcs) {
+    try { $proc.WaitForExit(5000) | Out-Null } catch { }
+}
+$env:FACEFUSION_USERDATA_DIR = Join-Path $packageRoot 'userdata'
+$env:PYTHONNOUSERSITE = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+Push-Location (Join-Path $packageRoot 'app\facefusion')
+try {
+    & $portablePython -B -m facefusion.runtime_cleanup
+}
+finally { Pop-Location }
+
 if (-not $stoppedAny) {
     Write-Host '没有找到正在运行的 FaceFusion。'
     exit 0

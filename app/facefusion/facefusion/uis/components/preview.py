@@ -184,6 +184,16 @@ def listen() -> None:
 
 
 def update_preview_image(preview_mode : PreviewMode, preview_resolution : str, frame_number : int = 0) -> gradio.Image:
+	from facefusion.sheet_worker import GPU_EXECUTION_LOCK
+	if not process_manager.is_pending() or not GPU_EXECUTION_LOCK.acquire(blocking=False):
+		return gradio.skip()
+	try:
+		return _update_preview_image(preview_mode, preview_resolution, frame_number)
+	finally:
+		GPU_EXECUTION_LOCK.release()
+
+
+def _update_preview_image(preview_mode : PreviewMode, preview_resolution : str, frame_number : int = 0) -> gradio.Image:
 	while process_manager.is_checking():
 		sleep(0.5)
 
@@ -258,6 +268,14 @@ def process_preview_frame(reference_vision_frame : VisionFrame, source_vision_fr
 				'temp_vision_mask': temp_vision_mask
 			})
 		logger.enable()
+
+	if state_manager.get_item('temple_correction') == 'on':
+		from facefusion.temple_correction import correct_temple
+		from facefusion.face_creator import scale_face
+		full_target = get_middle(target_vision_frames)
+		for face in select_faces(reference_vision_frame, source_vision_frames, target_vision_frames):
+			face = scale_face(face, full_target, target_vision_frame)
+			temp_vision_frame = correct_temple(target_vision_frame[:, :, :3], temp_vision_frame, face)
 
 	temp_vision_frame = prepare_output_frame(target_vision_frame, temp_vision_frame, temp_vision_mask)
 

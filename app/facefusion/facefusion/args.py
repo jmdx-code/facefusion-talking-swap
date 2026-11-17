@@ -63,6 +63,9 @@ def apply_args(args : Args, apply_state_item : ApplyStateItem) -> None:
 
 	apply_state_item('workflow_mode', args.get('workflow_mode'))
 	apply_state_item('workflow_strategy', args.get('workflow_strategy'))
+	apply_state_item('upscale_1080p', args.get('upscale_1080p', True))
+	# Jobs written before this option existed keep their original rendering.
+	apply_state_item('temple_correction', args.get('temple_correction', 'off'))
 	available_processors = [ get_file_name(file_path) for file_path in resolve_file_paths('facefusion/processors/modules') ]
 	apply_state_item('processors', args.get('processors'))
 

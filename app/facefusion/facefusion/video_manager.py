@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 import uuid
 from io import BufferedReader
 from typing import Optional, cast
@@ -133,23 +134,48 @@ def get_writer(video_path : str, temp_video_fps : Fps, temp_video_resolution : R
 
 
 def write_video_frame(video_writer : VideoWriter, vision_frame : VisionFrame) -> None:
-	video_writer.get('process').stdin.write(vision_frame.data)
+	try:
+		video_writer.get('process').stdin.write(vision_frame.data)
+	except OSError:
+		process = video_writer.get('process')
+		try: process.wait(timeout=.5)
+		except subprocess.TimeoutExpired: pass
+		if process.poll() not in (None, 0):
+			from facefusion import logger
+			logger.error('stream_encoder_failed: 视频编码器提前退出', __name__)
+		raise
 
 
 def close_video_writer(video_writer : VideoWriter) -> bool:
 	video_writer.get('process').stdin.close()
 	video_writer.get('process').wait()
 
+	if video_writer.get('process').returncode != 0:
+		from facefusion import logger
+		logger.error('stream_encoder_failed: 视频编码器退出状态异常', __name__)
 	return video_writer.get('process').returncode == 0
 
 
 def clear_video_pool() -> None:
-	for video_reader in VIDEO_POOL_SET.get('reader').values():
-		close_video_reader(video_reader)
-		frame_store.clear_frames(video_reader.get('id'))
-
-	for video_writer in VIDEO_POOL_SET.get('writer').values():
-		close_video_writer(video_writer)
-
+	# Detach pools first so a broken pipe cannot leave stale handles attached to
+	# the next job. Active tasks call this only when their processing has stopped.
+	readers = list(VIDEO_POOL_SET['reader'].values())
+	writers = list(VIDEO_POOL_SET['writer'].values())
 	VIDEO_POOL_SET['reader'].clear()
 	VIDEO_POOL_SET['writer'].clear()
+	for item in readers + writers:
+		process = item.get('process')
+		if process:
+			if process.poll() is None:
+				process.terminate()
+				try:
+					process.wait(timeout=5)
+				except subprocess.TimeoutExpired:
+					process.kill()
+					process.wait()
+			for stream in (process.stdin, process.stdout, process.stderr):
+				if stream:
+					try: stream.close()
+					except (OSError, ValueError): pass
+		if item in readers:
+			frame_store.clear_frames(item.get('id'))

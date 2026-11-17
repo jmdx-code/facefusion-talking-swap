@@ -36,6 +36,8 @@ DEFAULTS = {
     'face_parser_model': 'bisenet_resnet_34',
     'face_occluder_model': 'xseg_1'
 }
+DEFAULT_PRESET = 'default'
+DEFAULTS['temple_correction'] = 'off'
 PRESET_KEYS = tuple(DEFAULTS)
 
 
@@ -46,9 +48,10 @@ def preset(label, description, **overrides):
 
 
 BUILTINS = {
-    'clear': preset('没问题选这个', '之前的正常参数：InSwapper FP16换脸，LivePortrait恢复上下半脸80，GFPGAN 1.4混合65。'),
+    'default': preset('没问题选这个', '新默认：HyperSwap 1a 原生256，下半脸表情恢复100，GFPGAN混合65，最后局部修正太阳穴；不回填原口腔。', face_swapper_model='hyperswap_1a_256', face_swapper_pixel_boost='256x256', expression_restorer_factor=100, expression_restorer_areas=['lower-face'], face_mask_types=['box', 'region'], temple_correction='on'),
+    'clear': preset('旧模型', '原默认：InSwapper FP16换脸，恢复上下半脸80，GFPGAN混合65，不修正太阳穴。'),
     'mouth_restore': preset('解决嘴巴张不开', 'LivePortrait只恢复下半脸，强度100；GFPGAN 1.4混合30。用于改善换脸后口型偏小的情况。', expression_restorer_factor=100, expression_restorer_areas=['lower-face'], face_enhancer_blend=30),
-    'eye_restore': preset('解决眼睛斜', '在“没问题选这个”的基础上，只关闭上半脸表情恢复；保留下半脸恢复80和GFPGAN 1.4混合65。', expression_restorer_areas=['lower-face'])
+    'eye_restore': preset('解决眼睛斜', '在“旧模型”的基础上关闭上半脸表情恢复；保留下半脸恢复80和GFPGAN混合65。', expression_restorer_areas=['lower-face'])
 }
 
 
@@ -62,6 +65,7 @@ def validate_values(values):
         'face_parser_model': choices.face_parser_models,
         'face_occluder_model': choices.face_occluder_models
     }
+    enums['temple_correction'] = ['on', 'off']
     for key, allowed in enums.items():
         if values[key] not in allowed:
             raise ValueError('预设中的模型不受支持：' + key)
@@ -102,6 +106,9 @@ def read_custom():
         for name, values in data['presets'].items():
             if not isinstance(name, str) or not name.strip() or len(name) > 40:
                 raise ValueError('自定义预设名称无效。')
+            # Version 1 customs predate temple repair. Preserve their old behavior.
+            if isinstance(values, dict):
+                values.setdefault('temple_correction', 'off')
             validate_values(values)
         return data['presets']
     except (OSError, ValueError, TypeError, AttributeError) as error:

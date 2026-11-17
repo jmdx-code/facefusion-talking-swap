@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 from facefusion import presets, process_manager
+from facefusion.video_options import load_upscale_preference
 from facefusion.execution import get_available_execution_providers
 from facefusion.google_sheets_client import (
     DEFAULT_TOKEN_PATH,
@@ -82,7 +83,7 @@ LOCAL_STATUS_FAILED = '制作失败'
 LOCAL_STATUS_RETURNED = '已退回表格'
 LOCAL_STATUS_PAUSED_AUTH = '已暂停(待重授权恢复)'
 
-TQDM_PROGRESS_RE = re.compile(r'(?:([a-zA-Z_]+):\s*)?(\d{1,3})%\|.*?\|\s*(\d+/\d+)\s*\[([^\]]+)\]')
+TQDM_PROGRESS_RE = re.compile(r'(?:([a-zA-Z_ ]+):\s*)?(\d{1,3})%\|.*?\|\s*(\d+/\d+)\s*\[([^\]]+)\]')
 
 
 def _robust_rmtree(target: Path, retries: int = 4, delay_sec: float = 0.25) -> None:
@@ -238,7 +239,7 @@ def resolve_preset_values_by_label(preset_text: str) -> Tuple[str, Dict[str, Any
     if cleaned.endswith('（自定义）'):
         cleaned = cleaned[:-len('（自定义）')].strip()
 
-    default_builtin = presets.BUILTINS['clear']
+    default_builtin = presets.BUILTINS[presets.DEFAULT_PRESET]
     if not cleaned or cleaned in {'默认', '正常', '默认预设'}:
         return default_builtin['label'], copy.deepcopy(default_builtin['values']), ''
 
@@ -312,7 +313,8 @@ def build_headless_command(
         '--execution-thread-count', '2',
         '--video-memory-strategy', 'moderate',
         '--workflow-strategy', 'disk',
-        '--temp-frame-format', 'jpeg',
+        '--temp-frame-format', 'png',
+        '--upscale-1080p' if load_upscale_preference() else '--no-upscale-1080p',
         '--face-selector-mode', 'one',
         '--face-selector-order', 'large-small',
         '--processors', *[str(p) for p in preset_values['processors']],
@@ -332,6 +334,7 @@ def build_headless_command(
         '--face-mask-padding', *padding,
         '--face-parser-model', str(preset_values['face_parser_model']),
         '--face-occluder-model', str(preset_values['face_occluder_model']),
+        '--temple-correction', str(preset_values.get('temple_correction', 'off')),
         '--output-video-encoder', str(out_encoder),
         '--output-audio-encoder', 'aac',
         '--output-video-quality', '90',
@@ -461,15 +464,19 @@ class SheetWorkerManager:
                     continue
                 _robust_rmtree(child, retries=2, delay_sec=0.1)
 
+        from facefusion.runtime_cleanup import sweep_workspaces
+        sweep_workspaces()
+        from facefusion import state_manager
+        protected = [Path(p).resolve() for p in (state_manager.get_item('source_paths') or []) + [state_manager.get_item('target_path')] if p]
         if GRADIO_TEMP_DIR.is_dir() and process_manager.is_pending():
             cutoff_ts = time.time() - GRADIO_TEMP_TTL_SEC
             for entry in list(GRADIO_TEMP_DIR.iterdir()):
                 try:
+                    if any(entry.resolve() == path or entry.resolve() in path.parents for path in protected):
+                        continue
                     if entry.stat().st_mtime < cutoff_ts:
-                        if entry.is_dir():
-                            shutil.rmtree(entry, ignore_errors=True)
-                        else:
-                            entry.unlink(missing_ok=True)
+                        from facefusion.runtime_cleanup import safe_remove
+                        safe_remove(entry, GRADIO_TEMP_DIR)
                 except OSError:
                     pass
 
@@ -1244,6 +1251,7 @@ class SheetWorkerManager:
                     self.current_task = task
                     self.ui_state_version += 1
             if task is None:
+                self.sweep_runtime_temp_dirs()
                 self._wake_event.wait(timeout=1.5)
                 self._wake_event.clear()
                 continue
@@ -1263,6 +1271,8 @@ class SheetWorkerManager:
             if task.abort_requested:
                 raise InterruptedError('任务已由用户手动中止。')
             if process_manager.is_pending() and GPU_EXECUTION_LOCK.acquire(timeout=0.5):
+                from facefusion.workflows.staged_video import release_pools
+                release_pools()
                 return
             task.local_status = LOCAL_STATUS_WAITING_GPU
             task.progress_detail = '检测到手动换脸界面正在使用显卡，排队等待释放...'
@@ -1643,6 +1653,7 @@ class SheetWorkerManager:
             )
             env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
+            env['PYTHONIOENCODING'] = 'utf-8'
             stage_state: Dict[str, Any] = {
                 'saw_analysing': False,
                 'saw_extracting': False,
@@ -1792,6 +1803,17 @@ class SheetWorkerManager:
                     stage_state['saw_extracting'] = True
                 task.progress_pct = round(36.0 + (pct / 100.0) * 5.0, 1)
                 task.progress_detail = f'解包视频帧：{pct}% ({frames})'
+            elif stage_raw in {'face metadata', 'face swap', 'expression restore', 'enhance temple encode'}:
+                if stage_state is not None:
+                    stage_state['saw_processing'] = True
+                start, span, title = {
+                    'face metadata': (41, 8, '人脸定位'),
+                    'face swap': (49, 9, '1a换脸'),
+                    'expression restore': (58, 13, '表情恢复'),
+                    'enhance temple encode': (71, 14, '增强、太阳穴修正与编码')
+                }[stage_raw]
+                task.progress_pct = round(start + pct / 100 * span, 1)
+                task.progress_detail = f'{title}：{pct}% ({frames} 帧 | {rate_info})'
             elif stage_raw == 'merging':
                 if stage_state is not None:
                     stage_state['saw_merging'] = True
@@ -1806,6 +1828,8 @@ class SheetWorkerManager:
 
         recent_lines.append(cleaned)
         lower = cleaned.lower()
+        if ('staged_encoder_failed' in lower or 'stream_encoder_failed' in lower) and stage_state is not None:
+            stage_state['saw_merging'] = True
         if 'extracting frames' in lower or '提取帧' in cleaned:
             if stage_state is not None:
                 stage_state['saw_extracting'] = True

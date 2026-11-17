@@ -28,10 +28,14 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 # File lives at `<ROOT>/app/scripts/env_bootstrap.py` -> parents[2] is `<ROOT>`
 ROOT = Path(__file__).resolve().parents[2]
 
+# Pinned stable FFmpeg 9.0.2 release (same exact build as Microsoft WinGet `Gyan.FFmpeg.Essentials`, 280k+ downloads)
 FFMPEG_URLS: Tuple[str, ...] = (
-    'https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip',
-    'https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip',
+    'https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip',
+    'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-essentials_build.zip',
 )
+FFMPEG_ZIP_SHA256 = '60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba'
+FFMPEG_EXE_SHA256 = '3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec'
+FFPROBE_EXE_SHA256 = 'f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52'
 
 RUNTIME_PACKAGES: Tuple[Tuple[str, str], ...] = (
     ('aiofiles', '24.1.0'),
@@ -231,6 +235,9 @@ def find_ffmpeg_bin_dir(root_dir: Path = ROOT) -> Optional[Path]:
     for sub in sorted(tools_ff.iterdir()):
         if sub.is_dir():
             bin_dir = sub / 'bin'
+            # Reject legacy daily shared builds (`avcodec-*.dll`) that trigger Windows 11 Smart App Control (WinError 4551)
+            if any(bin_dir.glob('avcodec-*.dll')):
+                continue
             if (bin_dir / 'ffmpeg.exe').is_file() and (bin_dir / 'ffprobe.exe').is_file():
                 return bin_dir
     return None
@@ -250,8 +257,16 @@ def find_missing_packages() -> List[Tuple[str, str]]:
     return missing
 
 
+def _is_compatible_cp3_tag(py_parts: set[str], target_minor: int) -> bool:
+    for tag in py_parts:
+        if tag.startswith('cp3') and tag[3:].isdigit() and int(tag[3:]) <= target_minor:
+            return True
+    return False
+
+
 def select_best_wheel_from_pypi(urls_meta: List[Dict[str, Any]], py_nodot: str = '312') -> Optional[Tuple[str, str, str]]:
     cp_tag = f'cp{py_nodot}'
+    target_minor = int(py_nodot[1:]) if len(py_nodot) >= 2 and py_nodot[1:].isdigit() else 12
     candidates: List[Tuple[int, str, str, str]] = []
 
     for item in urls_meta:
@@ -281,7 +296,7 @@ def select_best_wheel_from_pypi(urls_meta: List[Dict[str, Any]], py_nodot: str =
             score = 100 if cp_tag in abi_parts else 90
         elif ('py3' in py_parts or 'py2.py3' in py_parts or cp_tag in py_parts) and 'none' in abi_parts and 'win_amd64' in plat_parts:
             score = 85
-        elif any(p.startswith('cp3') and p <= cp_tag for p in py_parts) and 'abi3' in abi_parts and 'win_amd64' in plat_parts:
+        elif _is_compatible_cp3_tag(py_parts, target_minor) and 'abi3' in abi_parts and 'win_amd64' in plat_parts:
             score = 80
         elif ('py3' in py_parts or 'py2.py3' in py_parts) and 'none' in abi_parts and 'any' in plat_parts:
             score = 70
@@ -301,13 +316,21 @@ def ensure_ffmpeg(root_dir: Path = ROOT) -> bool:
     if find_ffmpeg_bin_dir(root_dir) is not None:
         return True
 
-    print('\n>>> [环境初始化 1/3] 正在从 GitHub 官方源下载视频编解码工具 FFmpeg...', flush=True)
-    tmp_zip = root_dir / 'userdata' / 'temp' / 'ffmpeg-win64-gpl-shared.zip'
-    if not download_file_with_resume(FFMPEG_URLS, tmp_zip, label='FFmpeg (Windows x64)'):
+    print('\n>>> [环境初始化 1/3] 正在从官方源下载固定正式版 FFmpeg 9.0.2（带 SHA-256 校验）...', flush=True)
+    tmp_zip = root_dir / 'userdata' / 'temp' / 'ffmpeg-9.0.2-essentials_build.zip'
+    if not download_file_with_resume(
+        FFMPEG_URLS,
+        tmp_zip,
+        label='FFmpeg 9.0.2 正式版',
+        expected_sha256=FFMPEG_ZIP_SHA256,
+    ):
         print('[错误] FFmpeg 下载失败，请检查网络连接后重新双击启动（支持断点续传）。', flush=True)
         return False
 
-    target_bin = root_dir / 'tools' / 'ffmpeg' / 'ffmpeg-win64' / 'bin'
+    tools_ff = root_dir / 'tools' / 'ffmpeg'
+    if tools_ff.exists():
+        shutil.rmtree(tools_ff, ignore_errors=True)
+    target_bin = tools_ff / 'ffmpeg-9.0.2-essentials_build' / 'bin'
     target_bin.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -319,7 +342,7 @@ def ensure_ffmpeg(root_dir: Path = ROOT) -> bool:
                 if info.is_dir() or '/bin/' not in norm:
                     continue
                 base_name = norm.rsplit('/bin/', 1)[-1]
-                if not base_name or '/' in base_name or base_name.lower() == 'ffplay.exe':
+                if base_name.lower() not in ('ffmpeg.exe', 'ffprobe.exe'):
                     continue
                 dest = target_bin / base_name
                 with zf.open(info, 'r') as src_s, dest.open('wb') as dst_s:
@@ -330,11 +353,17 @@ def ensure_ffmpeg(root_dir: Path = ROOT) -> bool:
         return False
 
     tmp_zip.unlink(missing_ok=True)
-    if not (target_bin / 'ffmpeg.exe').is_file() or not (target_bin / 'ffprobe.exe').is_file():
+    ff_exe = target_bin / 'ffmpeg.exe'
+    fp_exe = target_bin / 'ffprobe.exe'
+    if not ff_exe.is_file() or not fp_exe.is_file():
         print('[错误] FFmpeg 解压后未找到可执行文件。', flush=True)
         return False
+    if _sha256_file(ff_exe) != FFMPEG_EXE_SHA256 or _sha256_file(fp_exe) != FFPROBE_EXE_SHA256:
+        shutil.rmtree(tools_ff, ignore_errors=True)
+        print('[错误] FFmpeg 可执行文件 SHA-256 校验未通过，已清理异常文件。', flush=True)
+        return False
 
-    print('    FFmpeg 已就绪！', flush=True)
+    print('    FFmpeg 9.0.2 正式版已就绪！', flush=True)
     return True
 
 
@@ -348,6 +377,16 @@ def ensure_python_packages(root_dir: Path = ROOT) -> bool:
     print(f'>>> [环境初始化 2/3] 首次运行：正在从官方 PyPI 安装运行库与 NVIDIA CUDA 组件（共 {total} 项）', flush=True)
     print('    支持字节级断点续传与官方 SHA-256 校验；安装一次永久生效，后续启动免下载。', flush=True)
     print('=' * 72, flush=True)
+
+    # Remove uv/standalone PEP 668 marker inside the private portable Python directory if present
+    for ext_marker in (
+        root_dir / 'runtime' / 'python' / 'Lib' / 'EXTERNALLY-MANAGED',
+        Path(sys.executable).resolve().parent / 'Lib' / 'EXTERNALLY-MANAGED',
+    ):
+        try:
+            ext_marker.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     wheelhouse = root_dir / 'userdata' / 'temp' / 'wheelhouse'
     wheelhouse.mkdir(parents=True, exist_ok=True)
@@ -366,6 +405,7 @@ def ensure_python_packages(root_dir: Path = ROOT) -> bool:
             'install',
             '--no-index',
             '--no-deps',
+            '--break-system-packages',
             '--no-warn-script-location',
             '--disable-pip-version-check',
             *[str(w) for w in wheels],

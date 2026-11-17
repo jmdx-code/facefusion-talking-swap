@@ -197,9 +197,9 @@ def conditional_download(download_directory_path : str, urls : List[str]) -> Non
 		download_file_name = os.path.basename(urlparse(url).path)
 		download_file_path = os.path.join(download_directory_path, download_file_name)
 		if is_file(download_file_path):
-			if download_file_name.endswith('.hash') and get_file_size(download_file_path) > 0:
+			if download_file_name.endswith('.hash') and is_valid_hash_file(download_file_path):
 				continue
-			if validate_hash(download_file_path) and validate_model_sha256(download_file_path):
+			if not download_file_name.endswith('.hash') and validate_hash(download_file_path) and validate_model_sha256(download_file_path):
 				continue
 			hash_path = get_hash_path(download_file_path)
 			if not is_file(hash_path) and validate_model_sha256(download_file_path):
@@ -261,8 +261,7 @@ def conditional_download_hashes(hash_set : DownloadSet) -> bool:
 		invalid_hash_file_name = get_file_name(invalid_hash_path)
 		logger.error(translator.get('validating_hash_failed').format(hash_file_name = invalid_hash_file_name), __name__)
 
-	if not invalid_hash_paths:
-		process_manager.end()
+	process_manager.end()
 	return not invalid_hash_paths
 
 
@@ -291,8 +290,7 @@ def conditional_download_sources(source_set : DownloadSet) -> bool:
 		if remove_file(invalid_source_path):
 			logger.error(translator.get('deleting_corrupt_source').format(source_file_name = invalid_source_file_name), __name__)
 
-	if not invalid_source_paths:
-		process_manager.end()
+	process_manager.end()
 	return not invalid_source_paths
 
 
@@ -301,7 +299,7 @@ def validate_hash_paths(hash_paths : List[str]) -> Tuple[List[str], List[str]]:
 	invalid_hash_paths = []
 
 	for hash_path in hash_paths:
-		if is_file(hash_path) and get_file_size(hash_path) > 0:
+		if is_valid_hash_file(hash_path):
 			valid_hash_paths.append(hash_path)
 		else:
 			invalid_hash_paths.append(hash_path)
@@ -309,12 +307,21 @@ def validate_hash_paths(hash_paths : List[str]) -> Tuple[List[str], List[str]]:
 	return valid_hash_paths, invalid_hash_paths
 
 
+def is_valid_hash_file(path : str) -> bool:
+	try:
+		with open(path, encoding='ascii') as stream:
+			return re.fullmatch(r'[0-9a-fA-F]{8}', stream.read(128).strip()) is not None
+	except (OSError, UnicodeError):
+		return False
+
+
 def validate_source_paths(source_paths : List[str]) -> Tuple[List[str], List[str]]:
+	from facefusion.model_bootstrap import validate_cached_model
 	valid_source_paths = []
 	invalid_source_paths = []
 
 	for source_path in source_paths:
-		if validate_hash(source_path):
+		if validate_cached_model(source_path):
 			valid_source_paths.append(source_path)
 		else:
 			invalid_source_paths.append(source_path)

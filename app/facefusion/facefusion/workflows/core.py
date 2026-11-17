@@ -4,7 +4,7 @@ import numpy
 
 from facefusion import logger, process_manager, state_manager, translator
 from facefusion.audio import create_empty_audio_frame, get_audio_frame, get_voice_frame
-from facefusion.common_helper import get_first
+from facefusion.common_helper import get_first, get_middle
 from facefusion.filesystem import filter_audio_paths
 from facefusion.processors.core import get_processors_modules
 from facefusion.temp_helper import clear_temp_directory, create_temp_directory
@@ -94,4 +94,16 @@ def process_temp_frame(target_vision_frames : List[VisionFrame], temp_vision_fra
 			'temp_vision_mask': temp_vision_mask
 		})
 
+	if state_manager.get_item('temple_correction') == 'on':
+		from facefusion.face_selector import select_faces
+		from facefusion.face_creator import scale_face
+		from facefusion.temple_correction import correct_temple
+		target_frame = get_middle(target_vision_frames)
+		original = target_frame[:, :, :3]
+		if original.shape[:2] != temp_vision_frame.shape[:2]:
+			import cv2
+			original = cv2.resize(original, (temp_vision_frame.shape[1], temp_vision_frame.shape[0]))
+		for face in select_faces(reference_vision_frame, source_vision_frames, target_vision_frames):
+			face = scale_face(face, target_frame, temp_vision_frame)
+			temp_vision_frame = correct_temple(original, temp_vision_frame, face)
 	return conditional_merge_vision_mask(temp_vision_frame, temp_vision_mask)

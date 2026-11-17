@@ -36,6 +36,7 @@ foreach ($dir in @($userDataDir, $modelsDir, $tempDir, $gradioTempDir, $jobsDir,
 
 $env:FACEFUSION_USERDATA_DIR = $userDataDir
 $env:PYTHONNOUSERSITE = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONPYCACHEPREFIX = $pyCacheDir
 $env:TEMP = $tempDir
 $env:TMP = $tempDir
@@ -47,25 +48,31 @@ $loopbackBypass = '127.0.0.1,localhost'
 $env:NO_PROXY = if ($env:NO_PROXY) { "$($env:NO_PROXY),$loopbackBypass" } else { $loopbackBypass }
 $env:no_proxy = $env:NO_PROXY
 
+$legacyFactoryArgs = @('run', '--execution-providers', 'cuda', '--execution-thread-count', '2', '--video-memory-strategy', 'moderate', '--workflow-strategy', 'disk', '--temp-frame-format', 'jpeg', '--processors', 'face_swapper', 'expression_restorer', 'face_enhancer', '--face-selector-mode', 'one', '--face-swapper-model', 'inswapper_128_fp16', '--face-swapper-pixel-boost', '128x128', '--face-swapper-weight', '0.5', '--expression-restorer-model', 'live_portrait', '--expression-restorer-factor', '80', '--expression-restorer-areas', 'upper-face', 'lower-face', '--face-enhancer-model', 'gfpgan_1.4', '--face-enhancer-blend', '65', '--face-mask-types', 'box', '--face-mask-blur', '0.65', '--output-video-encoder', 'h264_nvenc', '--output-audio-encoder', 'aac', '--output-video-quality', '90')
+if ($SkipPreflight -and (($FaceFusionArgs -join '|') -ceq ($legacyFactoryArgs -join '|'))) {
+    $FaceFusionArgs = @()
+}
+
 if (-not $FaceFusionArgs -or $FaceFusionArgs.Count -eq 0) {
     $FaceFusionArgs = @(
-        'run', '--open-browser',
+        'run',
         '--execution-providers', 'cuda',
         '--execution-thread-count', '2',
         '--video-memory-strategy', 'moderate',
         '--workflow-strategy', 'disk',
-        '--temp-frame-format', 'jpeg',
+        '--temp-frame-format', 'png',
         '--processors', 'face_swapper', 'expression_restorer', 'face_enhancer',
         '--face-selector-mode', 'one',
-        '--face-swapper-model', 'inswapper_128_fp16',
-        '--face-swapper-pixel-boost', '128x128',
+        '--face-swapper-model', 'hyperswap_1a_256',
+        '--face-swapper-pixel-boost', '256x256',
         '--face-swapper-weight', '0.5',
         '--expression-restorer-model', 'live_portrait',
-        '--expression-restorer-factor', '80',
-        '--expression-restorer-areas', 'upper-face', 'lower-face',
+        '--expression-restorer-factor', '100',
+        '--expression-restorer-areas', 'lower-face',
         '--face-enhancer-model', 'gfpgan_1.4',
         '--face-enhancer-blend', '65',
-        '--face-mask-types', 'box',
+        '--temple-correction', 'on',
+        '--face-mask-types', 'box', 'region',
         '--face-mask-blur', '0.65',
         '--output-video-encoder', 'h264_nvenc',
         '--output-audio-encoder', 'aac',

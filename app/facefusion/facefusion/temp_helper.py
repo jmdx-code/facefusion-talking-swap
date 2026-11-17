@@ -39,9 +39,14 @@ def get_temp_directory_path(file_path : str) -> str:
 
 def create_temp_directory(file_path : str) -> bool:
 	temp_directory_path = get_temp_directory_path(file_path)
-	return create_directory(temp_directory_path)
+	created = create_directory(temp_directory_path)
+	from facefusion.runtime_cleanup import mark_workspace
+	mark_workspace(temp_directory_path)
+	return created
 
 
 def clear_temp_directory(file_path : str) -> bool:
 	temp_directory_path = get_temp_directory_path(file_path)
-	return remove_directory(temp_directory_path)
+	from facefusion.runtime_cleanup import safe_remove, finish_workspace
+	finish_workspace(temp_directory_path)
+	return safe_remove(temp_directory_path, os.path.join(state_manager.get_item('temp_path'), 'facefusion'))

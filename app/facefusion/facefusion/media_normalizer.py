@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import collections
 import json
+import math
 import os
 import queue
 import shutil
+import statistics
 import subprocess
 import threading
 import time
@@ -74,6 +76,38 @@ class VideoInspection:
     is_hdr: bool
     has_audio: bool
     rotation: int
+    nominal_fps: float = 0.0
+
+
+def _inspect_frame_timing(video_path: Path) -> Tuple[bool, float]:
+    """Inspect packet timestamps; stream average/rate metadata alone can hide VFR."""
+    proc = subprocess.run(
+        [
+            _resolve_tool_binary('ffprobe'), '-v', 'error',
+            '-protocol_whitelist', FFMPEG_LOCAL_PROTOCOL_WHITELIST,
+            '-select_streams', 'v:0', '-read_intervals', '%+#360',
+            '-show_packets', '-show_entries', 'packet=pts_time',
+            '-of', 'json', str(video_path)
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        encoding='utf-8', errors='replace', timeout=30
+    )
+    if proc.returncode != 0:
+        raise ValueError('无法检查视频帧时间戳：' + proc.stderr.strip()[:160])
+    try:
+        packets = json.loads(proc.stdout).get('packets', [])
+        # Encoders can store B frames out of presentation order.
+        samples = {float(p['pts_time']) for p in packets if p.get('pts_time') is not None}
+        timestamps = sorted(value for value in samples if math.isfinite(value))
+    except (ValueError, TypeError, KeyError) as error:
+        raise ValueError('视频帧时间戳解析失败。') from error
+    intervals = [b - a for a, b in zip(timestamps, timestamps[1:]) if b > a]
+    if len(intervals) < 3:
+        return False, 0.0
+    interval = statistics.median(intervals)
+    tolerance = max(0.0015, interval * 0.10)
+    variable = any(abs(value - interval) > tolerance for value in intervals)
+    return variable, 1.0 / interval
 
 
 def _resolve_tool_binary(binary_name: str) -> str:
@@ -264,6 +298,7 @@ def inspect_video(video_path: Path, max_long_edge: int = 1920) -> VideoInspectio
 
     r_fps = _parse_fraction(str(vstream.get('r_frame_rate') or ''))
     avg_fps = _parse_fraction(str(vstream.get('avg_frame_rate') or '')) or r_fps
+    variable_timing, nominal_fps = _inspect_frame_timing(path)
     duration_sec = float((info.get('format') or {}).get('duration') or vstream.get('duration') or 0.0)
 
     reasons: List[str] = []
@@ -286,6 +321,8 @@ def inspect_video(video_path: Path, max_long_edge: int = 1920) -> VideoInspectio
         reasons.append(f'非常规帧率({avg_fps:.1f}fps)')
     elif r_fps > 0 and avg_fps > 0 and abs(r_fps - avg_fps) > 1.2:
         reasons.append(f'可变帧率VFR({avg_fps:.1f}/{r_fps:.1f}fps)')
+    if variable_timing and not any(reason.startswith('可变帧率VFR') for reason in reasons):
+        reasons.append('可变帧率VFR(实际帧时间戳不均匀)')
 
     if audio_streams:
         acodec = str(audio_streams[0].get('codec_name') or '').lower()
@@ -302,7 +339,8 @@ def inspect_video(video_path: Path, max_long_edge: int = 1920) -> VideoInspectio
         r_fps=r_fps,
         is_hdr=is_hdr,
         has_audio=bool(audio_streams),
-        rotation=rotation
+        rotation=rotation,
+        nominal_fps=nominal_fps
     )
 
 
@@ -362,6 +400,8 @@ def inspect_and_normalize_video(
     output_path = work_dir / 'target_normalized.mp4'
 
     target_fps = inspection.avg_fps if 15.0 <= inspection.avg_fps <= 60.0 else 30.0
+    if any(reason.startswith('可变帧率VFR') for reason in inspection.reasons) and 15.0 <= inspection.nominal_fps <= 60.1:
+        target_fps = min(60.0, inspection.nominal_fps)
     if inspection.avg_fps > 60.0:
         target_fps = 30.0
     fps_value = round(target_fps) if abs(target_fps - round(target_fps)) < 0.15 else round(target_fps, 2)

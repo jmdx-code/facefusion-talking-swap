@@ -15,6 +15,8 @@ import sys
 import urllib.error
 import urllib.request
 import zipfile
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
@@ -144,42 +146,87 @@ def validate_and_extract_update_zip(
             raise ValueError(f'更新包 SHA-256 校验不一致（期望 {expected_sha256[:12]}...，实际 {actual[:12]}...）')
 
     forbidden_roots = {'userdata', 'runtime', 'tools', '.git', '_维护者工具'}
-    extracted_count = 0
-
-    with zipfile.ZipFile(zip_path, 'r') as zf:
+    resolved_root = target_root.resolve()
+    cache = resolved_root / 'userdata' / 'temp' / 'update'
+    cache.mkdir(parents=True, exist_ok=True)
+    # Stage every file before touching the installation. Roll back the whole batch
+    # if replacement fails (disk full, permissions or a locked file).
+    with zipfile.ZipFile(zip_path, 'r') as zf, tempfile.TemporaryDirectory(prefix='transaction-', dir=cache) as temporary:
         bad_member = zf.testzip()
         if bad_member:
             raise ValueError(f'更新包 CRC 损坏：{bad_member}')
-
-        members = zf.infolist()
-        resolved_root = target_root.resolve()
-
-        # First pass: strict path-traversal & protected-directory validation
-        safe_entries: list[Tuple[zipfile.ZipInfo, Path]] = []
-        for info in members:
-            norm = info.filename.replace('\\', '/').strip('/')
-            if not norm or info.is_dir():
+        entries, seen = [], set()
+        stage_root = Path(temporary)
+        for info in zf.infolist():
+            name = info.filename.replace('\\', '/')
+            if info.is_dir():
                 continue
-            parts = norm.split('/')
-            if any(p in ('', '.', '..') for p in parts):
+            parts = name.split('/')
+            if any(p in ('', '.', '..') or ':' in p or p.endswith((' ', '.')) for p in parts):
                 raise ValueError(f'拒绝不安全的更新包路径：{info.filename}')
             if parts[0].lower() in forbidden_roots:
-                raise ValueError(f'拒绝覆盖受保护目录（{parts[0]}）：{info.filename}')
+                raise ValueError(f'拒绝覆盖受保护目录：{info.filename}')
+            if parts[0].lower() != 'app' and name not in {'启动FaceFusion.cmd', '停止FaceFusion.cmd', '使用说明.txt'}:
+                raise ValueError(f'更新包包含非程序文件：{info.filename}')
+            if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError('更新包不允许符号链接')
             dest = (resolved_root / Path(*parts)).resolve()
-            if resolved_root not in dest.parents:
-                raise ValueError(f'越界路径被拦截：{info.filename}')
-            safe_entries.append((info, dest))
+            if resolved_root not in dest.parents or name.lower() in seen:
+                raise ValueError(f'越界或重复更新路径：{info.filename}')
+            seen.add(name.lower())
+            staged = stage_root / 'new' / Path(*parts)
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as source, staged.open('wb') as output:
+                shutil.copyfileobj(source, output)
+            entries.append((dest, staged, stage_root / 'old' / Path(*parts)))
+        if not entries:
+            raise ValueError('更新包没有程序文件')
+        # VERSION is the commit marker: never advertise a partially installed version.
+        entries.sort(key=lambda entry: entry[0] == resolved_root / 'app' / 'VERSION')
+        installed = []
+        try:
+            for dest, staged, backup in entries:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                existed = dest.is_file()
+                if existed:
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(dest, backup)
+                os.replace(staged, dest)
+                installed.append((dest, backup, existed))
+        except BaseException:
+            for dest, backup, existed in reversed(installed):
+                if existed:
+                    shutil.copy2(backup, dest)
+                else:
+                    dest.unlink(missing_ok=True)
+            raise
+    return len(entries)
 
-        # Second pass: atomic file write via .upd_tmp
-        for info, dest in safe_entries:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            tmp_dest = dest.with_name(dest.name + '.upd_tmp')
-            with zf.open(info, 'r') as src_stream, tmp_dest.open('wb') as dst_stream:
-                shutil.copyfileobj(src_stream, dst_stream)
-            os.replace(tmp_dest, dest)
-            extracted_count += 1
 
-    return extracted_count
+@contextmanager
+def update_lock(target_root):
+    path = target_root / 'userdata' / 'temp' / 'update' / 'install.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as stream:
+        stream.seek(0)
+        if path.stat().st_size == 0:
+            stream.write(b'0')
+            stream.flush()
+        stream.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == 'nt':
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def check_and_apply_update(
@@ -239,19 +286,25 @@ def check_and_apply_update(
 
     try:
         expected_sha = _extract_expected_sha256(rel, timeout=timeout_sec)
+        if not expected_sha:
+            raise ValueError('更新包缺少 SHA-256 校验信息，已保留当前版本')
         upd_dir = target_root / 'userdata' / 'temp' / 'update'
         upd_dir.mkdir(parents=True, exist_ok=True)
-        zip_path = upd_dir / UPDATE_ASSET_NAME
-        part_path = upd_dir / (UPDATE_ASSET_NAME + '.part')
+        handle, unique_path = tempfile.mkstemp(prefix='download-', suffix='.zip', dir=upd_dir)
+        os.close(handle)
+        zip_path = Path(unique_path)
+        part_path = zip_path.with_suffix('.part')
 
         payload = _http_get_bytes(asset_url, timeout=max(timeout_sec * 3, 20.0))
         part_path.write_bytes(payload)
         os.replace(part_path, zip_path)
 
-        file_cnt = validate_and_extract_update_zip(zip_path, target_root, expected_sha256=expected_sha)
-        ver_dest = target_root / 'app' / 'VERSION'
-        ver_dest.parent.mkdir(parents=True, exist_ok=True)
-        ver_dest.write_text(f'{remote_ver}\n', encoding='utf-8')
+        with zipfile.ZipFile(zip_path) as archive:
+            package_version = archive.read('app/VERSION').decode('utf-8-sig').strip().lstrip('vV')
+            if package_version != remote_ver:
+                raise ValueError('更新包版本与发布版本不一致')
+        with update_lock(target_root):
+            file_cnt = validate_and_extract_update_zip(zip_path, target_root, expected_sha256=expected_sha)
         try:
             zip_path.unlink()
         except OSError:

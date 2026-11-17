@@ -10,16 +10,21 @@ def create_hash(content : bytes) -> str:
 
 
 def validate_hash(validate_path : str) -> bool:
+	if not is_file(validate_path):
+		return False
 	hash_path = get_hash_path(validate_path)
 
 	if is_file(hash_path):
-		with open(hash_path) as hash_file:
-			hash_content = hash_file.read()
-
-		with open(validate_path, 'rb') as validate_file:
-			validate_content = validate_file.read()
-
-		return create_hash(validate_content) == hash_content
+		try:
+			with open(hash_path, encoding='ascii') as hash_file:
+				hash_content = hash_file.read().strip()
+			checksum = 0
+			with open(validate_path, 'rb') as validate_file:
+				for chunk in iter(lambda: validate_file.read(1024 * 1024), b''):
+					checksum = zlib.crc32(chunk, checksum)
+			return format(checksum, '08x') == hash_content
+		except (OSError, UnicodeError):
+			return False
 	return False
 
 

@@ -4,15 +4,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import json
+import tempfile
+import threading
 import sys
 from typing import Dict, List, Tuple
 
 from facefusion import state_manager
-from facefusion.download import _stream_download_with_failover, resolve_download_url
+from facefusion.download import _stream_download_with_failover, resolve_download_url, is_valid_hash_file
 from facefusion.filesystem import get_file_size, is_file, remove_file, resolve_models_dir, resolve_relative_path
 from facefusion.hash_helper import validate_hash
 
-# Exact 19 models required by UI startup + all 3 built-in presets (normal / mouth / eye)
+# Exact models required by UI startup + all built-in presets
 PRESET_MODELS: Tuple[Tuple[str, str], ...] = (
     ('models-3.0.0', 'yoloface_8n.onnx'),
     ('models-3.0.0', '2dfan4.onnx'),
@@ -23,6 +26,7 @@ PRESET_MODELS: Tuple[Tuple[str, str], ...] = (
     ('models-3.1.0', 'xseg_1.onnx'),
     ('models-3.0.0', 'bisenet_resnet_34.onnx'),
     ('models-3.0.0', 'inswapper_128_fp16.onnx'),
+    ('models-3.3.0', 'hyperswap_1a_256.onnx'),
     ('models-3.0.0', 'live_portrait_feature_extractor.onnx'),
     ('models-3.0.0', 'live_portrait_motion_extractor.onnx'),
     ('models-3.0.0', 'live_portrait_eye_retargeter.onnx'),
@@ -37,6 +41,7 @@ PRESET_MODELS: Tuple[Tuple[str, str], ...] = (
 
 # Cryptographic SHA-256 digests of official FaceFusion weights (prevents CRC32 collision tampering)
 PINNED_MODEL_SHA256: Dict[str, str] = {
+    'hyperswap_1a_256.onnx': 'c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add',
     '2dfan4.onnx': '678c6fa539d52335a31c980feefdf4a6e02d781d83dce00af8a894f114557285',
     'arcface_w600k_r50.onnx': 'f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1',
     'bisenet_resnet_34.onnx': '4a0b8c958a3c938913bd06a8365dbb3c8761afba6ecbf0d14b3b1f77eb230c96',
@@ -60,7 +65,7 @@ PINNED_MODEL_SHA256: Dict[str, str] = {
 
 
 def validate_model_sha256(file_path: str) -> bool:
-    """Verify pinned SHA-256 digest when `file_path` is one of the 19 official preset ONNX models."""
+    """Verify pinned SHA-256 digest when `file_path` is one of the official preset ONNX models."""
     if not is_file(file_path):
         return False
     expected = PINNED_MODEL_SHA256.get(os.path.basename(file_path))
@@ -79,6 +84,40 @@ def validate_model_sha256(file_path: str) -> bool:
     return hasher.hexdigest() == expected
 
 
+INTEGRITY_LOCK = threading.RLock()
+
+
+def validate_cached_model(path, force=False):
+    """Reuse successful verification only while both model and hash are unchanged."""
+    from pathlib import Path
+    from facefusion.userdata_paths import get_userdata_dir
+    cache_path=get_userdata_dir()/'model-integrity-cache.json'
+    model=Path(path); hash_file=model.with_suffix('.hash')
+    try:
+        stat=model.stat(); hs=hash_file.stat()
+        stamp=[stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns,hs.st_size,hs.st_mtime_ns,hs.st_ctime_ns,PINNED_MODEL_SHA256.get(model.name)]
+    except OSError:return False
+    key=str(model.resolve())
+    with INTEGRITY_LOCK:
+        try:
+            cache=json.loads(cache_path.read_text(encoding='utf-8'))
+            if not isinstance(cache,dict):cache={}
+        except (OSError,ValueError):cache={}
+        if not force and cache.get(key)==stamp:return True
+        if not validate_hash(str(model)) or not validate_model_sha256(str(model)):return False
+        cache[key]=stamp
+        temporary=None
+        try:
+            cache_path.parent.mkdir(parents=True,exist_ok=True)
+            handle,temporary=tempfile.mkstemp(prefix='.model-integrity-',dir=cache_path.parent)
+            with os.fdopen(handle,'w',encoding='utf-8') as stream:json.dump(cache,stream)
+            os.replace(temporary,cache_path)
+        except OSError:pass
+        finally:
+            if temporary and os.path.exists(temporary):os.unlink(temporary)
+    return True
+
+
 def _init_default_download_state() -> None:
     if not state_manager.get_item('download_providers'):
         state_manager.init_item('download_providers', ['huggingface', 'github'])
@@ -86,26 +125,26 @@ def _init_default_download_state() -> None:
         state_manager.init_item('log_level', 'info')
 
 
-def find_missing_preset_models(verify_crc: bool = False) -> List[Tuple[str, str]]:
+def find_missing_preset_models(verify_crc: bool = False, force: bool = False) -> List[Tuple[str, str]]:
     missing: List[Tuple[str, str]] = []
     for base_name, onnx_name in PRESET_MODELS:
         stem, _ = os.path.splitext(onnx_name)
         hash_path = resolve_relative_path(f'../.assets/models/{stem}.hash')
         onnx_path = resolve_relative_path(f'../.assets/models/{onnx_name}')
-        if not is_file(hash_path) or get_file_size(hash_path) == 0:
+        if not is_valid_hash_file(hash_path):
             missing.append((base_name, onnx_name))
             continue
         if not is_file(onnx_path) or get_file_size(onnx_path) == 0:
             missing.append((base_name, onnx_name))
             continue
-        if verify_crc and (not validate_hash(onnx_path) or not validate_model_sha256(onnx_path)):
+        if verify_crc and not validate_cached_model(onnx_path, force=force):
             missing.append((base_name, onnx_name))
     return missing
 
 
-def ensure_preset_models() -> bool:
+def ensure_preset_models(force=False) -> bool:
     _init_default_download_state()
-    missing = find_missing_preset_models(verify_crc=False)
+    missing = find_missing_preset_models(verify_crc=True, force=force)
     if not missing:
         return True
 
@@ -123,11 +162,10 @@ def ensure_preset_models() -> bool:
         hash_path = resolve_relative_path(f'../.assets/models/{hash_name}')
         onnx_path = resolve_relative_path(f'../.assets/models/{onnx_name}')
 
-        if not is_file(hash_path) or get_file_size(hash_path) == 0:
-            hash_url = resolve_download_url(base_name, hash_name)
-            if not hash_url or not _stream_download_with_failover(hash_url, hash_path):
-                print(f'\n[错误] 无法下载校验文件 {hash_name}，请检查网络连接后重试。', flush=True)
-                return False
+        hash_url = resolve_download_url(base_name, hash_name)
+        if not hash_url or not _stream_download_with_failover(hash_url, hash_path):
+            print(f'\n[错误] 无法下载校验文件 {hash_name}，请检查网络连接后重试。', flush=True)
+            return False
 
         if is_file(onnx_path) and validate_hash(onnx_path) and validate_model_sha256(onnx_path):
             print(f'[{idx}/{total}] {onnx_name} 已校验就绪', flush=True)
@@ -153,13 +191,14 @@ def ensure_preset_models() -> bool:
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Bootstrap FaceFusion preset models from official CDNs.')
     parser.add_argument('--check-only', action='store_true', help='Exit 0 if all preset models exist, 10 if missing.')
+    parser.add_argument('--verify-all', action='store_true', help='Recompute all CRC32 and SHA-256 checks, ignoring the verified-file cache.')
     parser.add_argument('--ensure', action='store_true', help='Download and verify any missing preset models.')
     args = parser.parse_args(argv)
 
     if args.check_only:
-        return 0 if not find_missing_preset_models(verify_crc=False) else 10
+        return 0 if not find_missing_preset_models(verify_crc=True, force=args.verify_all) else 10
 
-    return 0 if ensure_preset_models() else 1
+    return 0 if ensure_preset_models(force=args.verify_all) else 1
 
 
 if __name__ == '__main__':

@@ -73,6 +73,8 @@ def _keep_in_minimal_python_core(rel: Path) -> bool:
         return True
 
     if sub_low[0] == 'lib':
+        if len(sub_low) == 2 and sub_low[1] == 'externally-managed':
+            return False
         if len(sub_low) >= 2 and sub_low[1] in _EXCLUDED_STDLIB_DIRS:
             return False
         if len(sub_low) >= 2 and sub_low[1] == 'site-packages':

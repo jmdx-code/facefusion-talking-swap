@@ -1,5 +1,5 @@
 import tempfile
-from argparse import ArgumentParser, HelpFormatter
+from argparse import ArgumentParser, HelpFormatter, BooleanOptionalAction
 from functools import partial
 
 import facefusion.choices
@@ -205,7 +205,11 @@ def create_workflow_program() -> ArgumentParser:
 	group_workflow = program.add_argument_group('workflow')
 	group_workflow.add_argument('--workflow-mode', help = translator.get('help.workflow_mode'), default = config.get_str_value('workflow', 'workflow_mode', 'auto'), choices = facefusion.choices.workflow_modes)
 	group_workflow.add_argument('--workflow-strategy', help = translator.get('help.workflow_strategy'), default = config.get_str_value('workflow', 'workflow_strategy', 'memory'), choices = facefusion.choices.workflow_strategies)
-	job_store.register_step_keys([ 'workflow_mode', 'workflow_strategy' ])
+	from facefusion.video_options import load_upscale_preference
+	group_workflow.add_argument('--upscale-1080p', action=BooleanOptionalAction, default=load_upscale_preference(), help='Enlarge low-resolution videos before face processing; shared by manual and automatic jobs.')
+	job_store.register_step_keys(['upscale_1080p'])
+	group_workflow.add_argument('--temple-correction', choices = ['on', 'off'], default = config.get_str_value('workflow', 'temple_correction', 'on'), help = 'Correct generated temple shadows after enhancement.')
+	job_store.register_step_keys([ 'workflow_mode', 'workflow_strategy', 'temple_correction' ])
 	return program
 
 

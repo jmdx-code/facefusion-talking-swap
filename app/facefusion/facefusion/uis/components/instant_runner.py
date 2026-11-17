@@ -9,6 +9,7 @@ from facefusion.args import collect_step_args
 from facefusion.core import process_step
 from facefusion.filesystem import has_image, is_directory, is_image, is_video
 from facefusion.jobs import job_helper, job_manager, job_runner, job_store
+from facefusion.manual_preflight import prepare_manual_video, cleanup_prepared_video
 from facefusion.temp_helper import clear_temp_directory
 from facefusion.types import Args, UiWorkflow
 from facefusion.uis.core import get_ui_component
@@ -99,6 +100,7 @@ def run() -> Tuple[gradio.Button, gradio.Button, gradio.Image, gradio.Video]:
 		_ACTIVE_RUNS += 1
 	try:
 		step_args = collect_step_args()
+		original_step_args = dict(step_args)
 		active_processors = step_args.get('processors') or state_manager.get_item('processors') or []
 		needs_source = ('face_swapper' in active_processors) or ('deep_swapper' in active_processors)
 		has_src = has_image(step_args.get('source_paths'))
@@ -118,6 +120,17 @@ def run() -> Tuple[gradio.Button, gradio.Button, gradio.Image, gradio.Video]:
 
 		if is_directory(step_args.get('output_path')):
 			step_args['output_path'] = suggest_output_path(step_args.get('output_path'), state_manager.get_item('target_path'))
+		try:
+			step_args, normalization_note = prepare_manual_video(step_args)
+		except InterruptedError:
+			process_manager.end()
+			return gradio.Button(visible = True), gradio.Button(visible = False), gradio.Image(value = None), gradio.Video(value = None)
+		except (ValueError, OSError) as error:
+			logger.error(str(error), __name__)
+			gradio.Warning(str(error))
+			return gradio.Button(visible = True), gradio.Button(visible = False), gradio.Image(value = None), gradio.Video(value = None)
+		if normalization_note:
+			logger.info('手动制作输入检查：' + normalization_note, __name__)
 		if job_manager.init_jobs(state_manager.get_item('jobs_path')):
 			create_and_run_job(step_args)
 			state_manager.set_item('output_path', output_path)
@@ -127,6 +140,8 @@ def run() -> Tuple[gradio.Button, gradio.Button, gradio.Image, gradio.Video]:
 			return gradio.Button(visible = True), gradio.Button(visible = False), gradio.Image(value = None, visible = False), gradio.Video(value = step_args.get('output_path'), visible = True)
 		return gradio.Button(visible = True), gradio.Button(visible = False), gradio.Image(value = None), gradio.Video(value = None)
 	finally:
+		if 'original_step_args' in locals():
+			cleanup_prepared_video(original_step_args, step_args)
 		with _RUN_LOCK:
 			_ACTIVE_RUNS = max(0, _ACTIVE_RUNS - 1)
 			_RUN_FINISHED_SEQ += 1

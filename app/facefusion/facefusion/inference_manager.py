@@ -1,10 +1,11 @@
 import importlib
 import random
+import threading
 from functools import lru_cache
 from time import sleep, time
 from typing import List
 
-from onnxruntime import InferenceSession
+from onnxruntime import InferenceSession, SessionOptions
 
 from facefusion import logger, process_manager, state_manager, translator
 from facefusion.app_context import detect_app_context
@@ -20,6 +21,7 @@ INFERENCE_POOL_SET : InferencePoolSet =\
 	'cli': {},
 	'ui': {}
 }
+POOL_LOCK = threading.RLock()
 
 
 def get_inference_pool(module_name : str, model_names : List[str], model_source_set : DownloadSet) -> InferencePool:
@@ -41,8 +43,10 @@ def get_inference_pool(module_name : str, model_names : List[str], model_source_
 				INFERENCE_POOL_SET['ui'][inference_context] = INFERENCE_POOL_SET.get('cli').get(inference_context)
 
 		if not INFERENCE_POOL_SET.get(app_context).get(inference_context):
-			inference_providers = resolve_static_inference_providers(module_name, execution_device_id)
-			INFERENCE_POOL_SET[app_context][inference_context] = create_inference_pool(model_source_set, inference_providers)
+			with POOL_LOCK:
+				if not INFERENCE_POOL_SET[app_context].get(inference_context):
+					inference_providers = resolve_static_inference_providers(module_name, execution_device_id)
+					INFERENCE_POOL_SET[app_context][inference_context] = create_inference_pool(model_source_set, inference_providers)
 
 	current_inference_context = get_inference_context(module_name, model_names, random.choice(execution_device_ids), execution_providers)
 	return INFERENCE_POOL_SET.get(app_context).get(current_inference_context)
@@ -80,7 +84,11 @@ def create_inference_session(model_path : str, inference_providers : List[Infere
 	start_time = time()
 
 	try:
-		inference_session = InferenceSession(model_path, providers = inference_providers)
+		options = SessionOptions()
+		options.intra_op_num_threads = 2
+		options.inter_op_num_threads = 1
+		inference_providers = [(p[0], dict(p[1], arena_extend_strategy='kSameAsRequested')) if isinstance(p, tuple) and p[0] == 'CUDAExecutionProvider' else p for p in inference_providers]
+		inference_session = InferenceSession(model_path, sess_options = options, providers = inference_providers)
 		logger.debug(translator.get('loading_model_succeeded').format(model_name = model_file_name, seconds = calculate_end_time(start_time)), __name__)
 		return inference_session
 

@@ -766,7 +766,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
             mode_idx = cmd.index('--face-selector-mode')
             self.assertEqual(cmd[mode_idx + 1], 'one')
             fmt_idx = cmd.index('--temp-frame-format')
-            self.assertEqual(cmd[fmt_idx + 1], 'jpeg')
+            self.assertEqual(cmd[fmt_idx + 1], 'png')
             order_idx = cmd.index('--face-selector-order')
             self.assertEqual(cmd[order_idx + 1], 'large-small')
         finally:
@@ -1432,7 +1432,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
             self.assertEqual(resolved_hash.stat().st_size, 8)
 
             missing = model_bootstrap.find_missing_preset_models(verify_crc=False)
-            self.assertEqual(len(missing), 19)
+            self.assertEqual(len(missing), len(model_bootstrap.PRESET_MODELS))
             self.assertEqual(model_bootstrap.main(['--check-only']), 10)
 
             # 4. Verify candidate failover + HTTP 206 Range resume + CRC32 validation
@@ -1706,7 +1706,7 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
 
         # 5. Pinned SHA-256 model tamper guard rejects forged payload for known preset model names
         from facefusion import model_bootstrap
-        self.assertEqual(len(model_bootstrap.PINNED_MODEL_SHA256), 19)
+        self.assertEqual(len(model_bootstrap.PINNED_MODEL_SHA256), len(model_bootstrap.PRESET_MODELS))
         fake_yolo = self.tmp_path / 'yoloface_8n.onnx'
         fake_yolo.write_bytes(b'tampered_onnx_weights')
         self.assertFalse(model_bootstrap.validate_model_sha256(str(fake_yolo)))

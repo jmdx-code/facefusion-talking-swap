@@ -76,6 +76,7 @@ $pyCacheDir = Join-Path $userDataDir 'pycache'
 New-Item -ItemType Directory -Path (Join-Path $userDataDir 'models'), $pyCacheDir -Force | Out-Null
 $env:FACEFUSION_USERDATA_DIR = $userDataDir
 $env:PYTHONNOUSERSITE = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONPYCACHEPREFIX = $pyCacheDir
 
 if (Test-Path -LiteralPath $autoUpdater) {
@@ -94,6 +95,7 @@ if (Test-Path -LiteralPath $envBootstrap) {
 
 Push-Location $sourceDir
 try {
+    & $portablePython -B -m facefusion.runtime_cleanup
     & $portablePython -m facefusion.model_bootstrap --check-only
     if ($LASTEXITCODE -eq 10) {
         Write-Host ''
@@ -110,7 +112,7 @@ finally {
 
 Write-Host '正在后台启动 FaceFusion 服务，启动完成后将自动打开浏览器...'
 $launcher = Join-Path $PSScriptRoot 'run-facefusion-portable.ps1'
-$argumentLine = '-NoProfile -ExecutionPolicy Bypass -File "' + $launcher + '" -SkipPreflight run --execution-providers cuda --execution-thread-count 2 --video-memory-strategy moderate --workflow-strategy disk --temp-frame-format jpeg --processors face_swapper expression_restorer face_enhancer --face-selector-mode one --face-swapper-model inswapper_128_fp16 --face-swapper-pixel-boost 128x128 --face-swapper-weight 0.5 --expression-restorer-model live_portrait --expression-restorer-factor 80 --expression-restorer-areas upper-face lower-face --face-enhancer-model gfpgan_1.4 --face-enhancer-blend 65 --face-mask-types box --face-mask-blur 0.65 --output-video-encoder h264_nvenc --output-audio-encoder aac --output-video-quality 90'
+$argumentLine = '-NoProfile -ExecutionPolicy Bypass -File "' + $launcher + '" -SkipPreflight'
 $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentLine -WorkingDirectory $packageRoot -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $errorLog -PassThru
 Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ascii
 

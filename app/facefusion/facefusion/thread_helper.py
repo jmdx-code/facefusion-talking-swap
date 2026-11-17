@@ -1,5 +1,6 @@
 import threading
 from contextlib import nullcontext
+from contextvars import ContextVar
 from typing import ContextManager, Union
 
 from facefusion.common_helper import is_linux, is_windows
@@ -7,6 +8,7 @@ from facefusion.execution import has_execution_provider
 
 THREAD_LOCK : threading.Lock = threading.Lock()
 THREAD_SEMAPHORE : threading.Semaphore = threading.Semaphore()
+STAGE_SEMAPHORE = ContextVar('stage_semaphore', default=None)
 NULL_CONTEXT : ContextManager[None] = nullcontext()
 
 
@@ -15,7 +17,7 @@ def thread_lock() -> threading.Lock:
 
 
 def thread_semaphore() -> threading.Semaphore:
-	return THREAD_SEMAPHORE
+	return STAGE_SEMAPHORE.get() or THREAD_SEMAPHORE
 
 
 def conditional_thread_semaphore() -> Union[threading.Semaphore, ContextManager[None]]:

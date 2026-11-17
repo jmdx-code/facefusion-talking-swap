@@ -1,3 +1,4 @@
+from facefusion.video_options import output_resolution as resolve_output_resolution, processing_resolution
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Deque
@@ -28,8 +29,8 @@ def analyse_video() -> ErrorCode:
 
 def extract_frames() -> ErrorCode:
 	trim_frame_start, trim_frame_end = restrict_trim_frame(state_manager.get_item('target_path'), state_manager.get_item('trim_frame_start'), state_manager.get_item('trim_frame_end'))
-	output_video_resolution = scale_resolution(detect_video_resolution(state_manager.get_item('target_path')), state_manager.get_item('output_video_scale'))
-	temp_video_resolution = restrict_video_resolution(state_manager.get_item('target_path'), output_video_resolution)
+	output_video_resolution = resolve_output_resolution(state_manager.get_item('target_path'))
+	temp_video_resolution = processing_resolution(state_manager.get_item('target_path'), output_video_resolution)
 	temp_video_fps = restrict_video_fps(state_manager.get_item('target_path'), state_manager.get_item('output_video_fps'))
 	logger.info(translator.get('extracting_frames').format(resolution=pack_resolution(temp_video_resolution), fps=temp_video_fps), __name__)
 
@@ -115,8 +116,8 @@ def process_memory_frame(frame_number : int, temp_video_resolution : Resolution,
 
 def process_memory_frames() -> ErrorCode:
 	trim_frame_start, trim_frame_end = restrict_trim_frame(state_manager.get_item('target_path'), state_manager.get_item('trim_frame_start'), state_manager.get_item('trim_frame_end'))
-	output_video_resolution = scale_resolution(detect_video_resolution(state_manager.get_item('target_path')), state_manager.get_item('output_video_scale'))
-	temp_video_resolution = restrict_video_resolution(state_manager.get_item('target_path'), output_video_resolution)
+	output_video_resolution = resolve_output_resolution(state_manager.get_item('target_path'))
+	temp_video_resolution = processing_resolution(state_manager.get_item('target_path'), output_video_resolution)
 	temp_video_fps = restrict_video_fps(state_manager.get_item('target_path'), state_manager.get_item('output_video_fps'))
 	temp_frame_total = predict_video_frame_total(state_manager.get_item('target_path'), temp_video_fps, trim_frame_start, trim_frame_end)
 	temp_frame_range = range(trim_frame_start, trim_frame_start + temp_frame_total)
@@ -135,6 +136,13 @@ def process_memory_frames() -> ErrorCode:
 				for frame_number in temp_frame_range:
 					future = executor.submit(process_memory_frame, frame_number, temp_video_resolution, output_video_resolution)
 					futures.append(future)
+					if len(futures) >= max(1, state_manager.get_item('execution_thread_count')) * 2:
+						if is_process_stopping():
+							for pending in futures: pending.cancel()
+							futures.clear()
+							break
+						video_manager.write_video_frame(video_writer, futures.popleft().result())
+						progress.update()
 
 				while futures:
 					future = futures.popleft()
@@ -166,7 +174,7 @@ def process_memory_frames() -> ErrorCode:
 
 def merge_frames() -> ErrorCode:
 	trim_frame_start, trim_frame_end = restrict_trim_frame(state_manager.get_item('target_path'), state_manager.get_item('trim_frame_start'), state_manager.get_item('trim_frame_end'))
-	output_video_resolution = scale_resolution(detect_video_resolution(state_manager.get_item('target_path')), state_manager.get_item('output_video_scale'))
+	output_video_resolution = resolve_output_resolution(state_manager.get_item('target_path'))
 	temp_video_fps = restrict_video_fps(state_manager.get_item('target_path'), state_manager.get_item('output_video_fps'))
 
 	logger.info(translator.get('merging_video').format(resolution = pack_resolution(output_video_resolution), fps = state_manager.get_item('output_video_fps')), __name__)

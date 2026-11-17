@@ -51,7 +51,7 @@ class PresetTest(unittest.TestCase):
             self.assertEqual(state_manager.get_item(key), value)
 
     def test_all_builtins_validate(self):
-        self.assertEqual([p['label'] for p in presets.BUILTINS.values()], ['没问题选这个', '解决嘴巴张不开', '解决眼睛斜'])
+        self.assertEqual([p['label'] for p in presets.BUILTINS.values()], ['没问题选这个', '旧模型', '解决嘴巴张不开', '解决眼睛斜'])
         for key in presets.BUILTINS:
             with self.subTest(key=key):
                 presets.apply_preset(key)

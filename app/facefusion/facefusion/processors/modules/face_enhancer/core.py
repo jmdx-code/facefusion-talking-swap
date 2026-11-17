@@ -12,7 +12,7 @@ from facefusion.common_helper import create_float_metavar, create_int_metavar, g
 from facefusion.download import conditional_download_hashes, conditional_download_sources, resolve_download_url
 from facefusion.face_creator import scale_face
 from facefusion.face_helper import paste_back, warp_face_by_face_landmark_5
-from facefusion.face_masker import create_box_mask, create_occlusion_mask
+from facefusion.face_masker import create_box_mask, create_occlusion_mask, create_region_mask
 from facefusion.face_selector import select_faces
 from facefusion.filesystem import in_directory, is_image, is_video, resolve_relative_path, same_file_extension
 from facefusion.processors.modules.face_enhancer import choices as face_enhancer_choices
@@ -360,6 +360,11 @@ def enhance_face(target_face : Face, temp_vision_frame : VisionFrame) -> VisionF
 	if 'occlusion' in state_manager.get_item('face_mask_types'):
 		occlusion_mask = create_occlusion_mask(crop_vision_frame)
 		crop_masks.append(occlusion_mask)
+
+	if 'region' in state_manager.get_item('face_mask_types'):
+		# Respect protected regions before enhancement can redraw their contents.
+		region_mask = create_region_mask(crop_vision_frame, state_manager.get_item('face_mask_regions'))
+		crop_masks.append(region_mask)
 
 	crop_vision_frame = prepare_crop_frame(crop_vision_frame)
 	face_enhancer_weight = numpy.array([ state_manager.get_item('face_enhancer_weight') ]).astype(numpy.double)

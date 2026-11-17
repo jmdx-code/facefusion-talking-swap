@@ -71,7 +71,10 @@ def on_check_hot_update() -> Tuple[str, gradio.Button]:
 		gradio.Warning('未找到内置热更新模块 auto_updater.py。')
 		return _render_header_html('未检测到更新模块'), gradio.Button(value = '🔄 检查在线热更新')
 
-	res = updater.check_and_apply_update(apply_update = True, timeout_sec = 10.0)
+	res = updater.check_and_apply_update(apply_update = False, timeout_sec = 10.0)
+	if res.status == 'update_available':
+		gradio.Info(f'发现 v{res.remote_version}，请停止后重新启动软件；启动时自动安装，个人数据和模型保留。')
+		return _render_header_html('发现新版，重启自动安装'), gradio.Button(value = '🔄 重启安装更新')
 	if res.status == 'updated':
 		gradio.Info(f'{res.message}（重启软件后新界面生效）')
 		return _render_header_html(f'已热更新至 v{res.remote_version}（重启生效）'), gradio.Button(value = '✅ 已更新（重启生效）')
