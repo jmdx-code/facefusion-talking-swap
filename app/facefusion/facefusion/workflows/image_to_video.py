@@ -20,7 +20,7 @@ def process_staged_or_fallback():
     from facefusion.roi_cache import CacheSpaceError
     from facefusion.gpu_memory import GpuMemoryError, forget_exception_frames
     from facefusion import logger, video_manager
-    from facefusion.workflows.staged_video import WORKER_TIERS, available_vram, choose_workers, release_pools, worker_tier_index
+    from facefusion.workflows.staged_video import WORKER_TIERS, available_vram_info, choose_workers, release_pools, worker_tier_index
     max_tier = None
     while True:
         try:
@@ -44,12 +44,16 @@ def process_staged_or_fallback():
         if process_manager.is_stopping() or process_manager.is_pending():
             return 4
         if failed_workers is None:
-            failed_workers = choose_workers(available_vram(), max_tier=max_tier)
+            free_mib, total_mib = available_vram_info()
+            failed_workers = choose_workers(free_mib, max_tier=max_tier, total_mib=total_mib)
         next_tier = worker_tier_index(failed_workers) - 1
         if next_tier < 0:
             logger.error('gpu_memory_exhausted: 最低并发档仍显存不足，请释放其他程序的显存后重试。' + detail, __name__)
             return 1
         max_tier = next_tier
+        if state_manager.get_item('command') == 'run':
+            from facefusion.gpu_status import GPU_STATUS
+            GPU_STATUS.note_retry('manual')
         logger.warn('gpu_memory_retry: %s档显存不足，已释放模型与临时缓存，降为%s档从头重试；画质参数不变。' % (
             failed_workers['tier'], WORKER_TIERS[max_tier]['tier']), __name__)
         clear()
@@ -85,12 +89,25 @@ def process(start_time : float) -> ErrorCode:
 		clear
 	])
 	process_manager.start()
+	telemetry_token = None
+	succeeded = False
+	error_code = None
+	if state_manager.get_item('command') == 'run':
+		from facefusion.gpu_status import GPU_STATUS
+		from pathlib import Path
+		import os
+		telemetry_token = GPU_STATUS.begin('manual', Path(state_manager.get_item('target_path')).name,
+			os.getpid(), state_manager.get_item('execution_device_ids'))
+	if process_staged_or_fallback not in tasks:
+		from facefusion.gpu_status import publish_tier
+		publish_tier(dict(tier='兼容流程', swap=state_manager.get_item('execution_thread_count') or 1), None, None)
 
 	try:
 		for task in tasks:
 			error_code = task()
 			if error_code > 0:
 				return error_code
+		succeeded = True
 		return 0
 	finally:
 		from facefusion import video_manager, logger
@@ -106,3 +123,5 @@ def process(start_time : float) -> ErrorCode:
 			from facefusion.vision import read_static_image
 			read_static_image.cache_clear()
 			process_manager.end()
+			if telemetry_token is not None:
+				GPU_STATUS.finish('manual', telemetry_token, '已完成' if succeeded else ('已停止' if error_code == 4 else '处理未完成'))

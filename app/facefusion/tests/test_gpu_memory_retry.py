@@ -73,7 +73,7 @@ class GpuMemoryRetryTests(unittest.TestCase):
     def test_model_load_failure_before_worker_selection_uses_available_memory(self):
         with self._patch_dispatcher() as mocks:
             mocks['render'].side_effect=[gpu_memory.GpuMemoryError('CUDA out of memory'),0]
-            with patch.object(staged_video,'available_vram',return_value=6000):
+            with patch.object(staged_video,'available_vram_info',return_value=(6000,8188)):
                 self.assertEqual(image_to_video.process_staged_or_fallback(),0)
             self.assertEqual(mocks['render'].call_args_list,[call(),call(max_tier=1)])
 

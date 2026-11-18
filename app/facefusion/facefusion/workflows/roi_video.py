@@ -30,7 +30,7 @@ from facefusion.temp_helper import get_temp_directory_path
 from facefusion.temple_correction import correct_temple
 from facefusion.video_options import output_resolution, processing_resolution
 from facefusion.vision import read_static_images, restrict_trim_frame, restrict_video_fps, predict_video_frame_total, unpack_resolution
-from facefusion.workflows.staged_video import available_vram, choose_workers, release_pools, bounded_map
+from facefusion.workflows.staged_video import available_vram_info, choose_workers, release_pools, bounded_map
 
 
 class OriginalFrames:
@@ -130,10 +130,12 @@ def process_roi_video(max_tier=None):
         if source_face is None:
             raise ValueError('源图片未检测到人脸')
         release_pools()
-        free_mib = available_vram()
-        workers = choose_workers(free_mib, max_tier=max_tier)
-        logger.info('默认人脸区域FFV1无损流程：30秒分文件，空闲显存%s MiB，%s档；换脸%s / 表情%s / 增强%s / 太阳穴%s' % (
-            free_mib, workers['tier'], workers['swap'], workers['restore'], workers['enhance'], workers['temple']), __name__)
+        free_mib, total_mib = available_vram_info()
+        workers = choose_workers(free_mib, max_tier=max_tier, total_mib=total_mib)
+        from facefusion.gpu_status import publish_tier
+        publish_tier(workers, free_mib, total_mib)
+        logger.info('默认人脸区域FFV1无损流程：30秒分文件，总显存%s MiB，空闲%s MiB，%s档；换脸%s / 表情%s / 增强%s / 太阳穴%s' % (
+            total_mib, free_mib, workers['tier'], workers['swap'], workers['restore'], workers['enhance'], workers['temple']), __name__)
         output_size = output_resolution(target)
         size = processing_resolution(target, output_size)
         fps = restrict_video_fps(target, state_manager.get_item('output_video_fps'))

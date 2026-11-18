@@ -1446,6 +1446,8 @@ class SheetWorkerManager:
         base_final_note = ''
 
         self.log(f'开始处理任务 {task.task_id}（预设：{task.preset_name}）')
+        from facefusion.gpu_status import GPU_STATUS
+        GPU_STATUS.begin('sheet', task.task_id, None)
 
         try:
             drive = GoogleDriveClient(self.oauth)
@@ -1644,6 +1646,7 @@ class SheetWorkerManager:
                 elif is_drive_fatal:
                     self._trip_circuit_breaker('Google Drive 云盘空间已满或成品文件夹无写入权限', can_write_sheet=True)
         finally:
+            GPU_STATUS.finish_task('sheet', task.task_id)
             if work_dir.resolve().parent == temp_root_resolved:
                 _robust_rmtree(work_dir)
 
@@ -1701,6 +1704,8 @@ class SheetWorkerManager:
                 stderr=subprocess.STDOUT,
                 bufsize=0
             ) as proc:
+                from facefusion.gpu_status import GPU_STATUS
+                telemetry_token = GPU_STATUS.begin('sheet', task.task_id, proc.pid) if isinstance(getattr(proc, 'pid', None), int) else None
                 with self._lock:
                     self._current_proc = proc
 
@@ -1779,7 +1784,11 @@ class SheetWorkerManager:
                             raise ValueError('目标视频全程未检测到可替换的人脸（0 帧生效），已拦截上传避免交付未换脸原片，请检查目标视频画面。')
                         return
                 finally:
-                    terminate_process_tree(proc)
+                    try:
+                        terminate_process_tree(proc)
+                    finally:
+                        if telemetry_token is not None:
+                            GPU_STATUS.finish('sheet', telemetry_token)
 
             joined_recent = '\n'.join(recent_lines)
             lower_recent = joined_recent.lower()
@@ -1814,6 +1823,10 @@ class SheetWorkerManager:
     ) -> None:
         cleaned = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
         if not cleaned:
+            return
+
+        from facefusion.gpu_status import consume_tier, GPU_STATUS
+        if consume_tier(task.task_id, cleaned):
             return
 
         swapped_m = SWAPPED_TOTAL_RE.search(cleaned)
@@ -1862,6 +1875,7 @@ class SheetWorkerManager:
         recent_lines.append(cleaned)
         lower = cleaned.lower()
         if ('gpu_memory_retry' in lower or 'gpu_memory_exhausted' in lower) and stage_state is not None:
+            GPU_STATUS.note_retry('sheet', task_id=task.task_id)
             stage_state['saw_processing'] = True
             task.progress_detail = '显存不足，正在降低并发并重新处理...' if 'gpu_memory_retry' in lower else '最低并发档仍显存不足'
         if ('staged_encoder_failed' in lower or 'stream_encoder_failed' in lower) and stage_state is not None:

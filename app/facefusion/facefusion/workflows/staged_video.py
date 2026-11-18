@@ -43,7 +43,12 @@ WORKER_TIERS = (
 )
 
 
-def choose_workers(free_mib, max_tier=None):
+def choose_workers(free_mib, max_tier=None, total_mib=0):
+    # The measured medium-tier peak was 2792 MiB. Give 6 GiB-class cards
+    # a 3200 MiB entry point (~400 MiB margin), and avoid a costly high-tier
+    # attempt even when the desktop happens to leave almost all VRAM free.
+    six_gib_card = 5120 < total_mib <= 6144
+    medium_minimum = 3200 if six_gib_card else 3600
     # Modest 25% increase for cards with ample free VRAM (typically 12 GiB+).
     # Above the total VRAM of an 8 GiB card, so its measured tiers stay intact.
     # This tier still needs 12 GiB hardware benchmarking; metadata stays at 8
@@ -54,10 +59,12 @@ def choose_workers(free_mib, max_tier=None):
     # plus headroom. Budget the job's increment, not the whole system's peak.
     elif free_mib >= 5000:
         tier = 2
-    elif free_mib >= 3600:
+    elif free_mib >= medium_minimum:
         tier = 1
     else:
         tier = 0
+    if six_gib_card:
+        tier = min(tier, 1)
     if max_tier is not None:
         tier = min(tier, max_tier)
     return dict(WORKER_TIERS[tier])
@@ -67,15 +74,22 @@ def worker_tier_index(workers):
     return next(index for index, item in enumerate(WORKER_TIERS) if item['tier'] == workers['tier'])
 
 
-def available_vram():
+def available_vram_info():
     if state_manager.get_item('execution_providers') != ['cuda']:
-        return 0
+        return 0, 0
     try:
-        rows = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.free', '--format=csv,noheader,nounits'], timeout=5, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).decode().splitlines()
+        rows = subprocess.check_output(['nvidia-smi', '--query-gpu=memory.free,memory.total', '--format=csv,noheader,nounits'], timeout=5, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).decode().splitlines()
         ids = state_manager.get_item('execution_device_ids') or [0]
-        return min(int(rows[int(device)].strip()) for device in ids)
+        selected = [tuple(int(value.strip()) for value in rows[int(device)].split(',')) for device in ids]
+        if any(len(row) != 2 for row in selected):
+            return 0, 0
+        return min(row[0] for row in selected), min(row[1] for row in selected)
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
-        return 0
+        return 0, 0
+
+
+def available_vram():
+    return available_vram_info()[0]
 
 
 def release_pools():

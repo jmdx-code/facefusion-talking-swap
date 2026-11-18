@@ -5,6 +5,7 @@ import gradio
 from facefusion import metadata
 from facefusion.uis.components import about, age_modifier_options, background_remover_options, deep_swapper_options, download, execution, execution_thread_count, expression_restorer_options, face_debugger_options, face_detector, face_editor_options, face_enhancer_options, face_landmarker, face_masker, face_selector, face_swapper_options, face_tracker, frame_colorizer_options, frame_enhancer_options, instant_runner, job_manager, job_runner, lip_syncer_options, memory, output, output_options, presets, preview, preview_options, processors, sheet_worker, source, target, temp_frame, terminal, trim_frame, ui_workflow, updater_bar, voice_extractor, workflow
 from facefusion.uis.core import launch_gradio_ui
+from facefusion.uis.components import gpu_status
 
 
 def pre_check() -> bool:
@@ -49,6 +50,7 @@ def render() -> gradio.Blocks:
 						with gradio.Column(elem_classes = [ 'ff-card-panel' ]):
 							_step_header('3', '开始制作与导出', '完成后右侧直接播放或打开目录')
 							instant_runner.render()
+							gpu_status.render('manual')
 							terminal.render_progress()
 							output.render_path()
 
@@ -116,6 +118,7 @@ def render() -> gradio.Blocks:
 								about.render()
 
 			with gradio.Tab('📋 云表格任务中心'):
+				gpu_status.render('sheet')
 				sheet_worker.render()
 	return layout
 
@@ -159,7 +162,10 @@ def listen() -> None:
 	presets.listen()
 	sheet_worker.listen()
 	updater_bar.listen()
+	gpu_status.listen()
 
 
 def run(ui : gradio.Blocks) -> None:
+	from facefusion.gpu_status import GPU_STATUS
+	GPU_STATUS.enable()
 	launch_gradio_ui(ui)
