@@ -1706,7 +1706,8 @@ class SheetCoordinatorAndWorkerTest(unittest.TestCase):
 
         # 5. Pinned SHA-256 model tamper guard rejects forged payload for known preset model names
         from facefusion import model_bootstrap
-        self.assertEqual(len(model_bootstrap.PINNED_MODEL_SHA256), len(model_bootstrap.PRESET_MODELS))
+        required_models = {name for _, name in model_bootstrap.PRESET_MODELS}
+        self.assertTrue(required_models.issubset(model_bootstrap.PINNED_MODEL_SHA256))
         fake_yolo = self.tmp_path / 'yoloface_8n.onnx'
         fake_yolo.write_bytes(b'tampered_onnx_weights')
         self.assertFalse(model_bootstrap.validate_model_sha256(str(fake_yolo)))

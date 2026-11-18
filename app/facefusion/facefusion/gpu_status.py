@@ -132,7 +132,7 @@ GPU_STATUS = GpuStatus()
 
 def publish_tier(workers, free_mib, total_mib):
     from facefusion import logger, state_manager
-    if state_manager.get_item('command') == 'run':
+    if state_manager.get_item('command') in (None, 'run'):
         GPU_STATUS.update_tier('manual', workers, free_mib, total_mib)
     logger.info(TIER_MARKER + json.dumps(dict(workers=workers, free_mib=free_mib, total_mib=total_mib), ensure_ascii=False), __name__)
 

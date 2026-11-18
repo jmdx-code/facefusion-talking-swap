@@ -149,7 +149,7 @@ def create_face_masker_program() -> ArgumentParser:
 	group_face_masker.add_argument('--face-mask-types', help = translator.get('help.face_mask_types').format(choices = ', '.join(facefusion.choices.face_mask_types)), default = config.get_str_list('face_masker', 'face_mask_types', 'box'), choices = facefusion.choices.face_mask_types, nargs = '+', metavar = 'FACE_MASK_TYPES')
 	group_face_masker.add_argument('--face-mask-areas', help = translator.get('help.face_mask_areas').format(choices = ', '.join(facefusion.choices.face_mask_areas)), default = config.get_str_list('face_masker', 'face_mask_areas', ' '.join(facefusion.choices.face_mask_areas)), choices = facefusion.choices.face_mask_areas, nargs = '+', metavar = 'FACE_MASK_AREAS')
 	group_face_masker.add_argument('--face-mask-regions', help = translator.get('help.face_mask_regions').format(choices = ', '.join(facefusion.choices.face_mask_regions)), default = config.get_str_list('face_masker', 'face_mask_regions', ' '.join(facefusion.choices.face_mask_regions)), choices = facefusion.choices.face_mask_regions, nargs = '+', metavar = 'FACE_MASK_REGIONS')
-	group_face_masker.add_argument('--face-mask-blur', help = translator.get('help.face_mask_blur'), type = float, default = config.get_float_value('face_masker', 'face_mask_blur', '0.3'), choices = facefusion.choices.face_mask_blur_range, metavar = create_float_metavar(facefusion.choices.face_mask_blur_range))
+	group_face_masker.add_argument('--face-mask-blur', help = translator.get('help.face_mask_blur'), type = float, default = config.get_float_value('face_masker', 'face_mask_blur', '0.65'), choices = facefusion.choices.face_mask_blur_range, metavar = create_float_metavar(facefusion.choices.face_mask_blur_range))
 	group_face_masker.add_argument('--face-mask-padding', help = translator.get('help.face_mask_padding'), type = partial(sanitize_int_range, int_range = facefusion.choices.face_mask_padding_range), default = config.get_int_list('face_masker', 'face_mask_padding', '0 0 0 0'), nargs = '+')
 	job_store.register_step_keys([ 'face_occluder_model', 'face_parser_model', 'face_mask_types', 'face_mask_areas', 'face_mask_regions', 'face_mask_blur', 'face_mask_padding' ])
 	return program
@@ -208,7 +208,7 @@ def create_workflow_program() -> ArgumentParser:
 	from facefusion.video_options import load_upscale_preference
 	group_workflow.add_argument('--upscale-1080p', action=BooleanOptionalAction, default=load_upscale_preference(), help='Enlarge low-resolution videos before face processing; shared by manual and automatic jobs.')
 	job_store.register_step_keys(['upscale_1080p'])
-	group_workflow.add_argument('--temple-correction', choices = ['on', 'off'], default = config.get_str_value('workflow', 'temple_correction', 'on'), help = 'Correct generated temple shadows after enhancement.')
+	group_workflow.add_argument('--temple-correction', choices = ['on', 'off'], default = config.get_str_value('workflow', 'temple_correction', 'off'), help = 'Correct generated temple shadows after enhancement.')
 	job_store.register_step_keys([ 'workflow_mode', 'workflow_strategy', 'temple_correction' ])
 	return program
 
@@ -217,7 +217,7 @@ def create_processors_program() -> ArgumentParser:
 	program = ArgumentParser(add_help = False)
 	available_processors = [ get_file_name(file_path) for file_path in resolve_file_paths('facefusion/processors/modules') ]
 	group_processors = program.add_argument_group('processors')
-	group_processors.add_argument('--processors', help = translator.get('help.processors').format(choices = ', '.join(available_processors)), default = config.get_str_list('processors', 'processors', 'face_swapper'), choices = available_processors, nargs = '+', metavar = 'PROCESSORS')
+	group_processors.add_argument('--processors', help = translator.get('help.processors').format(choices = ', '.join(available_processors)), default = config.get_str_list('processors', 'processors', 'face_swapper expression_restorer face_enhancer'), choices = available_processors, nargs = '+', metavar = 'PROCESSORS')
 	job_store.register_step_keys([ 'processors' ])
 	for processor_module in get_processors_modules(available_processors):
 		processor_module.register_args(program)

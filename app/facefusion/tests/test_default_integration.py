@@ -19,20 +19,61 @@ spec.loader.exec_module(updater)
 
 
 class DefaultIntegrationTest(unittest.TestCase):
-    def test_default_and_old_sheet_jobs_are_distinct(self):
+    def test_double_click_launcher_uses_original_recipe(self):
+        import re
+        from facefusion import config
+        from facefusion.args import apply_args
+        from facefusion.program import create_program
+        path = Path(__file__).resolve().parents[2]/'scripts/run-facefusion-portable.ps1'
+        text = path.read_text(encoding='utf-8-sig')
+        block = re.search(r'^    \$FaceFusionArgs = @\(\n(.*?)^    \)', text, re.M | re.S)
+        self.assertIsNotNone(block)
+        argv = re.findall(r"'([^']*)'", block.group(1))
+        config.get_static_config_parser.cache_clear()
+        args = vars(create_program().parse_args(argv))
+        apply_args(args, state_manager.init_item)
+        current = presets.snapshot()
+        current['face_mask_padding'] = list(current['face_mask_padding'])
+        self.assertEqual(current, presets.DEFAULTS)
+        self.assertEqual(args['temp_frame_format'], 'png')
+        self.assertEqual(args['workflow_strategy'], 'disk')
+        config.get_static_config_parser.cache_clear()
+
+    def test_shipped_and_empty_config_defaults_match_original_recipe(self):
+        from facefusion import config
+        from facefusion.args import apply_args
+        from facefusion.program import create_program
+        with tempfile.TemporaryDirectory() as folder:
+            empty = Path(folder)/'empty.ini'
+            empty.write_text('', encoding='utf-8')
+            shipped = Path(__file__).resolve().parents[1]/'facefusion.ini'
+            for path in [shipped, empty]:
+                with self.subTest(config=str(path)):
+                    config.get_static_config_parser.cache_clear()
+                    args = vars(create_program().parse_args(['headless-run', '--config-path', str(path)]))
+                    apply_args(args, state_manager.init_item)
+                    current = presets.snapshot()
+                    current['face_mask_padding'] = list(current['face_mask_padding'])
+                    self.assertEqual(current, presets.DEFAULTS)
+                    self.assertTrue(staged_video.supported())
+                    self.assertTrue(args['upscale_1080p'])
+        config.get_static_config_parser.cache_clear()
+
+    def test_default_and_legacy_sheet_labels_use_unchanged_old_recipe(self):
         for label in ['', '默认', '没问题选这个', 'default']:
             resolved, values, warning=sheet_worker.resolve_preset_values_by_label(label)
             self.assertFalse(warning)
-            self.assertEqual(values['face_swapper_model'], 'hyperswap_1a_256')
-            self.assertEqual(values['face_swapper_pixel_boost'], '256x256')
-            self.assertEqual(values['expression_restorer_areas'], ['lower-face'])
-            self.assertEqual(values['expression_restorer_factor'], 100)
+            self.assertEqual(values, presets.DEFAULTS)
+            self.assertEqual(values['face_swapper_model'], 'inswapper_128_fp16')
+            self.assertEqual(values['face_swapper_pixel_boost'], '128x128')
+            self.assertEqual(values['expression_restorer_areas'], ['upper-face', 'lower-face'])
+            self.assertEqual(values['expression_restorer_factor'], 80)
             self.assertEqual(values['face_enhancer_blend'], 65)
-            self.assertEqual(values['face_mask_types'], ['box', 'region'])
-            self.assertEqual(values['temple_correction'], 'on')
+            self.assertEqual(values['face_mask_types'], ['box'])
+            self.assertEqual(values['temple_correction'], 'off')
             cmd=sheet_worker.build_headless_command('python',Path('facefusion.py'),Path('source.png'),Path('input.mp4'),Path('out.mp4'),Path('temp'),Path('jobs'),values)
-            self.assertEqual(cmd[cmd.index('--temple-correction')+1], 'on')
-            self.assertEqual(cmd[cmd.index('--face-swapper-model')+1], 'hyperswap_1a_256')
+            self.assertEqual(cmd[cmd.index('--temple-correction')+1], 'off')
+            self.assertEqual(cmd[cmd.index('--face-swapper-model')+1], 'inswapper_128_fp16')
         for label in ['clear', '旧模型']:
             _, values, warning=sheet_worker.resolve_preset_values_by_label(label)
             self.assertEqual(values['face_swapper_model'],'inswapper_128_fp16')
@@ -62,7 +103,8 @@ class DefaultIntegrationTest(unittest.TestCase):
             self.assertTrue(hash_helper.validate_hash(str(path)))
             path.with_suffix('.hash').write_text('<html>error</html>')
             self.assertFalse(download.is_valid_hash_file(str(path.with_suffix('.hash'))))
-        self.assertIn(('models-3.3.0','hyperswap_1a_256.onnx'), model_bootstrap.PRESET_MODELS)
+        self.assertIn(('models-3.0.0','inswapper_128_fp16.onnx'), model_bootstrap.PRESET_MODELS)
+        self.assertNotIn(('models-3.3.0','hyperswap_1a_256.onnx'), model_bootstrap.PRESET_MODELS)
 
     def test_staged_progress_and_encoder_fallback_marker(self):
         from collections import deque

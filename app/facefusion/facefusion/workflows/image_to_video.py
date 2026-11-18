@@ -51,7 +51,7 @@ def process_staged_or_fallback():
             logger.error('gpu_memory_exhausted: 最低并发档仍显存不足，请释放其他程序的显存后重试。' + detail, __name__)
             return 1
         max_tier = next_tier
-        if state_manager.get_item('command') == 'run':
+        if state_manager.get_item('command') in (None, 'run'):
             from facefusion.gpu_status import GPU_STATUS
             GPU_STATUS.note_retry('manual')
         logger.warn('gpu_memory_retry: %s档显存不足，已释放模型与临时缓存，降为%s档从头重试；画质参数不变。' % (
@@ -92,7 +92,7 @@ def process(start_time : float) -> ErrorCode:
 	telemetry_token = None
 	succeeded = False
 	error_code = None
-	if state_manager.get_item('command') == 'run':
+	if state_manager.get_item('command') in (None, 'run'):
 		from facefusion.gpu_status import GPU_STATUS
 		from pathlib import Path
 		import os

@@ -72,6 +72,13 @@ class TestGpuStatus(unittest.TestCase):
                 self.assertTrue(gpu_status.consume_tier('remote', gpu_status.TIER_MARKER + bad))
             self.assertEqual(self.status.snapshot('sheet', False)['tier'], '中')
 
+    def test_manual_job_step_with_cleared_command_still_publishes_tier(self):
+        # apply_args(step_args) clears command while an instant-runner job runs.
+        self.status.begin('manual', 'ui-job', 100)
+        with patch.object(gpu_status, 'GPU_STATUS', self.status), patch('facefusion.state_manager.get_item', return_value=None), patch('facefusion.logger.info'):
+            gpu_status.publish_tier(dict(tier='中', swap=4), 3300, 6144)
+        self.assertEqual(self.status.snapshot('manual', False)['tier'], '中')
+
     def test_format_escapes_and_never_substitutes_whole_device(self):
         self.status.begin('manual', '<script>evil</script>', 100)
         self.collector.amount = None

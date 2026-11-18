@@ -48,8 +48,8 @@ def preset(label, description, **overrides):
 
 
 BUILTINS = {
-    'default': preset('没问题选这个', '新默认：HyperSwap 1a 原生256，下半脸表情恢复100，GFPGAN混合65，最后局部修正太阳穴；不回填原口腔。', face_swapper_model='hyperswap_1a_256', face_swapper_pixel_boost='256x256', expression_restorer_factor=100, expression_restorer_areas=['lower-face'], face_mask_types=['box', 'region'], temple_correction='on'),
-    'clear': preset('旧模型', '原默认：InSwapper FP16换脸，恢复上下半脸80，GFPGAN混合65，不修正太阳穴。'),
+    'default': preset('没问题选这个', '默认：恢复原InSwapper FP16完整方案，128像素换脸、上下半脸恢复80、GFPGAN混合65、box遮罩；关闭太阳穴修正和原口腔回填。保留帧率对齐、1080p开关与无损省空间缓存。'),
+    'clear': preset('旧模型', '与“没问题选这个”相同的原默认方案，保留此名称兼容已有表格任务。'),
     'mouth_restore': preset('解决嘴巴张不开', 'LivePortrait只恢复下半脸，强度100；GFPGAN 1.4混合30。用于改善换脸后口型偏小的情况。', expression_restorer_factor=100, expression_restorer_areas=['lower-face'], face_enhancer_blend=30),
     'eye_restore': preset('解决眼睛斜', '在“旧模型”的基础上关闭上半脸表情恢复；保留下半脸恢复80和GFPGAN混合65。', expression_restorer_areas=['lower-face'])
 }

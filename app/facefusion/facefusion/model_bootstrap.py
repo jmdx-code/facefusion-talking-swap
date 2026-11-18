@@ -26,7 +26,6 @@ PRESET_MODELS: Tuple[Tuple[str, str], ...] = (
     ('models-3.1.0', 'xseg_1.onnx'),
     ('models-3.0.0', 'bisenet_resnet_34.onnx'),
     ('models-3.0.0', 'inswapper_128_fp16.onnx'),
-    ('models-3.3.0', 'hyperswap_1a_256.onnx'),
     ('models-3.0.0', 'live_portrait_feature_extractor.onnx'),
     ('models-3.0.0', 'live_portrait_motion_extractor.onnx'),
     ('models-3.0.0', 'live_portrait_eye_retargeter.onnx'),
