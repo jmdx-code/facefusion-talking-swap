@@ -5,11 +5,13 @@ folder; stages release ORT pools, and enhancement overlaps local temple repair.
 """
 from facefusion.video_options import output_resolution as resolve_output_resolution, processing_resolution
 from collections import deque
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import gc
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 from facefusion import face_store, inference_manager, logger, process_manager, state_manager
 from facefusion.vision import restrict_video_fps
 
@@ -92,11 +94,43 @@ def available_vram():
     return available_vram_info()[0]
 
 
-def release_pools():
+SERIAL_STAGES = threading.Event()
+
+
+@contextmanager
+def task_memory_policy():
+    """Serialize compatibility frames only when CUDA memory is constrained.
+
+    The caller owns GPU_EXECUTION_LOCK. Default FFV1 presets keep their existing
+    whole-video stage concurrency; compatibility presets retain their exact math.
+    """
+    from facefusion.filesystem import is_image
+    serial = False
+    if state_manager.get_item('execution_providers') == ['cuda']:
+        free, total = available_vram_info()
+        serial = is_image(state_manager.get_item('target_path')) or (
+            not supported() and ((0 < total <= 6144) or free < 3200))
+    previous = state_manager.get_item('execution_thread_count')
+    was_serial = SERIAL_STAGES.is_set()
+    if serial:
+        state_manager.set_item('execution_thread_count', 1)
+        SERIAL_STAGES.set()
+        logger.info('兼容/单图流程按单帧串行分阶段释放显存；模型、画质和处理顺序不变。', __name__)
+    try:
+        yield
+    finally:
+        if serial:
+            state_manager.set_item('execution_thread_count', previous)
+        if not was_serial:
+            SERIAL_STAGES.clear()
+
+
+def release_pools(preserve_faces=False):
     with inference_manager.POOL_LOCK:
         for pools in inference_manager.INFERENCE_POOL_SET.values():
             pools.clear()
-    face_store.clear_faces()
+    if not preserve_faces:
+        face_store.clear_faces()
     gc.collect()
 
 

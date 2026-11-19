@@ -140,6 +140,21 @@ def require_idle():
 
 
 def apply_preset(key):
+    from facefusion.sheet_worker import GPU_EXECUTION_LOCK
+    from facefusion.workflows.staged_video import release_pools
+    require_idle()
+    if not GPU_EXECUTION_LOCK.acquire(blocking=False):
+        raise ValueError('预览或制作正在使用显卡，请稍后再切换预设。')
+    try:
+        return _apply_preset_locked(key)
+    finally:
+        try:
+            release_pools()
+        finally:
+            GPU_EXECUTION_LOCK.release()
+
+
+def _apply_preset_locked(key):
     require_idle()
     item = resolve_preset(key)
     values = validate_values(item['values'])

@@ -83,16 +83,21 @@ def process_temp_frame(target_vision_frames : List[VisionFrame], temp_vision_fra
 	temp_vision_mask = extract_vision_mask(temp_vision_frame)
 
 	for processor_module in get_processors_modules(state_manager.get_item('processors')):
-		temp_vision_frame, temp_vision_mask = processor_module.process_frame(
-		{
-			'reference_vision_frame': reference_vision_frame,
-			'source_vision_frames': source_vision_frames,
-			'source_audio_frame': source_audio_frame,
-			'source_voice_frame': source_voice_frame,
-			'target_vision_frames': target_vision_frames,
-			'temp_vision_frame': temp_vision_frame[:, :, :3],
-			'temp_vision_mask': temp_vision_mask
-		})
+		try:
+			temp_vision_frame, temp_vision_mask = processor_module.process_frame(
+			{
+				'reference_vision_frame': reference_vision_frame,
+				'source_vision_frames': source_vision_frames,
+				'source_audio_frame': source_audio_frame,
+				'source_voice_frame': source_voice_frame,
+				'target_vision_frames': target_vision_frames,
+				'temp_vision_frame': temp_vision_frame[:, :, :3],
+				'temp_vision_mask': temp_vision_mask
+			})
+		finally:
+			from facefusion.workflows.staged_video import SERIAL_STAGES, release_pools
+			if SERIAL_STAGES.is_set():
+				release_pools(preserve_faces=True)
 
 	if state_manager.get_item('temple_correction') == 'on':
 		from facefusion.face_selector import select_faces

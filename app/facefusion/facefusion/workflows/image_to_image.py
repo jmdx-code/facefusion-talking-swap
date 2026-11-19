@@ -6,10 +6,17 @@ from facefusion.workflows.core import clear, setup
 from facefusion.workflows.to_image import analyse_image, finalize_image, prepare_image, process_image
 
 
+def release_analysis_models():
+	from facefusion.workflows.staged_video import release_pools
+	release_pools()
+	return 0
+
+
 def process(start_time : float) -> ErrorCode:
 	tasks =\
 	[
 		analyse_image,
+		release_analysis_models,
 		clear,
 		setup,
 		prepare_image,

@@ -23,6 +23,24 @@ from facefusion.vision import detect_frame_orientation, extract_vision_mask, fit
 PREVIEW_IMAGE : Optional[gradio.Image] = None
 
 
+def _preview_memory_warning(error):
+	from facefusion.gpu_memory import is_gpu_memory_error, forget_exception_frames
+	if not is_gpu_memory_error(error, state_manager.get_item('execution_providers')):
+		return False
+	forget_exception_frames(error)
+	gradio.Warning('预览显存不足，已释放本次预览模型。请释放其他程序的显存后重试；当前模型与画质参数未改变。')
+	return True
+
+
+def _initial_preview_frame(*args):
+	try:
+		return process_preview_frame(*args)
+	except Exception as error:
+		if not _preview_memory_warning(error):
+			raise
+		return None
+
+
 def render() -> None:
 	global PREVIEW_IMAGE
 
@@ -45,16 +63,18 @@ def render() -> None:
 	if is_image(state_manager.get_item('target_path')):
 		target_vision_frame = read_static_image(state_manager.get_item('target_path'))
 		reference_vision_frame = read_static_image(state_manager.get_item('target_path'))
-		preview_vision_frame = process_preview_frame(reference_vision_frame, source_vision_frames, source_audio_frame, source_voice_frame, [ target_vision_frame ], uis_choices.preview_modes[0], uis_choices.preview_resolutions[-1])
-		preview_image_options['value'] = cv2.cvtColor(preview_vision_frame, cv2.COLOR_BGR2RGB)
-		preview_image_options['elem_classes'] = [ 'image-preview', 'is-' + detect_frame_orientation(preview_vision_frame) ]
+		preview_vision_frame = _initial_preview_frame(reference_vision_frame, source_vision_frames, source_audio_frame, source_voice_frame, [ target_vision_frame ], uis_choices.preview_modes[0], uis_choices.preview_resolutions[-1])
+		if preview_vision_frame is not None:
+			preview_image_options['value'] = cv2.cvtColor(preview_vision_frame, cv2.COLOR_BGR2RGB)
+			preview_image_options['elem_classes'] = [ 'image-preview', 'is-' + detect_frame_orientation(preview_vision_frame) ]
 
 	if is_video(state_manager.get_item('target_path')):
 		reference_vision_frame = read_video_frame(state_manager.get_item('target_path'), state_manager.get_item('reference_frame_number'))
 		target_vision_frames = select_video_frames(state_manager.get_item('target_path'), state_manager.get_item('reference_frame_number'), state_manager.get_item('target_frame_amount'))
-		preview_vision_frame = process_preview_frame(reference_vision_frame, source_vision_frames, source_audio_frame, source_voice_frame, target_vision_frames, uis_choices.preview_modes[0], uis_choices.preview_resolutions[-1])
-		preview_image_options['value'] = cv2.cvtColor(preview_vision_frame, cv2.COLOR_BGR2RGB)
-		preview_image_options['elem_classes'] = [ 'image-preview', 'is-' + detect_frame_orientation(preview_vision_frame) ]
+		preview_vision_frame = _initial_preview_frame(reference_vision_frame, source_vision_frames, source_audio_frame, source_voice_frame, target_vision_frames, uis_choices.preview_modes[0], uis_choices.preview_resolutions[-1])
+		if preview_vision_frame is not None:
+			preview_image_options['value'] = cv2.cvtColor(preview_vision_frame, cv2.COLOR_BGR2RGB)
+			preview_image_options['elem_classes'] = [ 'image-preview', 'is-' + detect_frame_orientation(preview_vision_frame) ]
 		preview_image_options['visible'] = True
 	PREVIEW_IMAGE = gradio.Image(**preview_image_options)
 	register_ui_component('preview_image', PREVIEW_IMAGE)
@@ -189,8 +209,18 @@ def update_preview_image(preview_mode : PreviewMode, preview_resolution : str, f
 		return gradio.skip()
 	try:
 		return _update_preview_image(preview_mode, preview_resolution, frame_number)
+	except Exception as error:
+		if not _preview_memory_warning(error):
+			raise
+		return gradio.Image(value = None)
 	finally:
-		GPU_EXECUTION_LOCK.release()
+		try:
+			from facefusion.workflows.staged_video import release_pools
+			from facefusion import video_manager
+			release_pools()
+			video_manager.clear_video_pool()
+		finally:
+			GPU_EXECUTION_LOCK.release()
 
 
 def _update_preview_image(preview_mode : PreviewMode, preview_resolution : str, frame_number : int = 0) -> gradio.Image:
@@ -232,6 +262,18 @@ def clear_and_update_preview_image(preview_mode : PreviewMode, preview_resolutio
 
 
 def process_preview_frame(reference_vision_frame : VisionFrame, source_vision_frames : List[VisionFrame], source_audio_frame : AudioFrame, source_voice_frame : AudioFrame, target_vision_frames : List[VisionFrame], preview_mode : PreviewMode, preview_resolution : str) -> VisionFrame:
+	from facefusion.workflows.staged_video import release_pools
+	release_pools()
+	try:
+		return _process_preview_frame(reference_vision_frame, source_vision_frames, source_audio_frame, source_voice_frame, target_vision_frames, preview_mode, preview_resolution)
+	finally:
+		release_pools()
+		from facefusion import video_manager
+		video_manager.clear_video_pool()
+
+
+def _process_preview_frame(reference_vision_frame : VisionFrame, source_vision_frames : List[VisionFrame], source_audio_frame : AudioFrame, source_voice_frame : AudioFrame, target_vision_frames : List[VisionFrame], preview_mode : PreviewMode, preview_resolution : str) -> VisionFrame:
+	from facefusion.workflows.staged_video import release_pools
 	target_vision_frame = get_middle(target_vision_frames)
 	target_vision_frame = restrict_frame(target_vision_frame, unpack_resolution(preview_resolution))
 	temp_vision_mask = extract_vision_mask(target_vision_frame)
@@ -239,7 +281,9 @@ def process_preview_frame(reference_vision_frame : VisionFrame, source_vision_fr
 	target_vision_frames = [ restrict_frame(vision_frame, unpack_resolution(preview_resolution))[:, :, :3] for vision_frame in target_vision_frames ]
 	temp_vision_frame = target_vision_frame.copy()
 
-	if analyse_frame(target_vision_frame[:, :, :3]):
+	blocked = analyse_frame(target_vision_frame[:, :, :3])
+	release_pools(preserve_faces=True)
+	if blocked:
 		if preview_mode == 'frame-by-frame':
 			temp_vision_frame = obscure_frame(temp_vision_frame[:, :, :3])
 			return numpy.hstack((temp_vision_frame, temp_vision_frame))
@@ -254,20 +298,25 @@ def process_preview_frame(reference_vision_frame : VisionFrame, source_vision_fr
 		return temp_vision_frame
 
 	for processor_module in get_processors_modules(state_manager.get_item('processors')):
-		logger.disable()
-		if processor_module.pre_process('preview'):
+		try:
+			logger.disable()
+			if processor_module.pre_process('preview'):
+				logger.enable()
+				temp_vision_frame, temp_vision_mask = processor_module.process_frame(
+				{
+					'reference_vision_frame': reference_vision_frame,
+					'source_audio_frame': source_audio_frame,
+					'source_voice_frame': source_voice_frame,
+					'source_vision_frames': source_vision_frames,
+					'target_vision_frames': target_vision_frames,
+					'temp_vision_frame': temp_vision_frame[:, :, :3],
+					'temp_vision_mask': temp_vision_mask
+				})
+		finally:
 			logger.enable()
-			temp_vision_frame, temp_vision_mask = processor_module.process_frame(
-			{
-				'reference_vision_frame': reference_vision_frame,
-				'source_audio_frame': source_audio_frame,
-				'source_voice_frame': source_voice_frame,
-				'source_vision_frames': source_vision_frames,
-				'target_vision_frames': target_vision_frames,
-				'temp_vision_frame': temp_vision_frame[:, :, :3],
-				'temp_vision_mask': temp_vision_mask
-			})
-		logger.enable()
+			# Keep the exact face selection/landmarks for downstream processors;
+			# only inference sessions are discarded between image operations.
+			release_pools(preserve_faces=True)
 
 	if state_manager.get_item('temple_correction') == 'on':
 		from facefusion.temple_correction import correct_temple

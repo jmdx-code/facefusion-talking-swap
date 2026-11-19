@@ -7,6 +7,12 @@ from facefusion.workflows.to_video import analyse_video, extract_frames, finaliz
 from facefusion.workflows.staged_video import supported, process_staged_frames, has_disk_budget
 
 
+def release_analysis_models():
+    from facefusion.workflows.staged_video import release_pools
+    release_pools()
+    return 0
+
+
 def process_stream_fallback():
     previous=state_manager.get_item('execution_thread_count')
     state_manager.set_item('execution_thread_count',1)
@@ -66,6 +72,7 @@ def process(start_time : float) -> ErrorCode:
 	tasks =\
 	[
 		analyse_video,
+		release_analysis_models,
 		clear,
 		setup
 	]

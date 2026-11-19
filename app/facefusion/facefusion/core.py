@@ -327,30 +327,41 @@ def conditional_process() -> ErrorCode:
 				acquired = gpu_lock.acquire(timeout = 0.5)
 
 	try:
-		start_time = time()
+		# Own the GPU lock before touching sessions: a preview may have loaded
+		# every processor, and pre_process/content analysis can allocate too.
+		from facefusion.workflows.staged_video import release_pools
+		release_pools()
+		from facefusion.workflows.staged_video import task_memory_policy
+		with task_memory_policy():
+			start_time = time()
 
-		if state_manager.get_item('workflow_mode') == 'auto':
-			state_manager.set_item('workflow_mode', detect_workflow_mode())
+			if state_manager.get_item('workflow_mode') == 'auto':
+				state_manager.set_item('workflow_mode', detect_workflow_mode())
 
-		if state_manager.get_item('workflow_mode') == detect_workflow_mode():
-			for processor_module in get_processors_modules(state_manager.get_item('processors')):
-				if not processor_module.pre_process('output'):
-					process_manager.end()
-					return 2
+			if state_manager.get_item('workflow_mode') == detect_workflow_mode():
+				for processor_module in get_processors_modules(state_manager.get_item('processors')):
+					if not processor_module.pre_process('output'):
+						process_manager.end()
+						return 2
 
-			if state_manager.get_item('workflow_mode') == 'image-to-image':
-				return image_to_image.process(start_time)
-			if state_manager.get_item('workflow_mode') == 'image-to-video':
-				return image_to_video.process(start_time)
+				if state_manager.get_item('workflow_mode') == 'image-to-image':
+					return image_to_image.process(start_time)
+				if state_manager.get_item('workflow_mode') == 'image-to-video':
+					return image_to_video.process(start_time)
+
+				process_manager.end()
+				return 0
 
 			process_manager.end()
-			return 0
-
-		process_manager.end()
-		return 2
+			return 2
 	finally:
-		if acquired and gpu_lock is not None:
-			gpu_lock.release()
+		# Also covers failed pre_process, single images and compatibility presets.
+		from facefusion.workflows.staged_video import release_pools
+		try:
+			release_pools()
+		finally:
+			if acquired and gpu_lock is not None:
+				gpu_lock.release()
 
 
 def detect_workflow_mode() -> WorkflowMode:
